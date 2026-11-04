@@ -68,9 +68,26 @@ To try the UI without credentials, run `npm run mock`. It serves generated sampl
 Docker:
 
 ```bash
-docker build -t genesys-token-dashboard .
+docker build -t genesys-token-dashboard \
+  --build-arg VERSION=$(node -p "require('./package.json').version") \
+  --build-arg BUILD_COMMIT=$(git rev-parse --short HEAD) \
+  --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) .
 docker run --env-file .env -p 3000:3000 genesys-token-dashboard
 ```
+
+## Versioning
+
+The project uses [Semantic Versioning](https://semver.org/). The version in `package.json` is the single source of truth. The running app shows it in the page header, returns it from `GET /api/version` (with the git commit and build date), and sends it on every response as the `X-App-Version` header, for example `1.0.0+4922d91`.
+
+Changes are recorded in [CHANGELOG.md](CHANGELOG.md) under `## [Unreleased]` as you go. To cut a release from an up-to-date `main`:
+
+```bash
+npm run release:patch   # bug fixes          1.0.0 -> 1.0.1
+npm run release:minor   # new features       1.0.0 -> 1.1.0
+npm run release:major   # breaking changes   1.0.0 -> 2.0.0
+```
+
+Each command bumps `package.json`, moves the Unreleased notes into a dated section of the changelog, commits, tags `vX.Y.Z` and pushes. It refuses to run if the Unreleased section is empty. Pushing the tag triggers the **Release** workflow, which runs the tests, checks that the tag matches `package.json`, and publishes a GitHub release with the changelog notes and a source zip. The **CI** workflow runs the tests on every pull request and on pushes to `main`.
 
 ## Configuration
 
@@ -91,6 +108,9 @@ src/catalog.js    Flow / VA / AVA discovery and classification
 src/usage.js      Analytics queries, token math, filtering and summaries
 src/billing.js    Contract billing periods, token charges and wallets
 src/mock.js       Sample data for mock mode
+src/version.js    App version and build metadata
+scripts/          Changelog release helpers used by npm version and the release workflow
+.github/workflows CI and release workflows
 public/           Web UI (plain HTML, CSS and JS, no build step)
 test/             Unit tests (npm test)
 ```
@@ -101,6 +121,6 @@ test/             Unit tests (npm test)
 - `GET /api/usage.csv?...` same parameters
 - `GET /api/billing?start=&end=`
 - `GET /api/catalog[?refresh=1]`
-- `GET /api/config`, `GET /api/health`
+- `GET /api/version`, `GET /api/config`, `GET /api/health`
 
 The server keeps the OAuth secret; the browser only talks to these local endpoints. There is no login on the dashboard itself, so run it on a trusted network or put it behind your own SSO / reverse proxy.

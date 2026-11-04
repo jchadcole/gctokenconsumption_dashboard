@@ -432,6 +432,11 @@
       mode.textContent = cfg.mock ? 'Sample data' : `Live · ${cfg.region}`;
       mode.classList.toggle('mock', cfg.mock);
       $('#org').textContent = catalog.org?.name || '';
+      if (cfg.version) {
+        const v = $('#version');
+        v.textContent = `v${cfg.version.version}`;
+        v.title = [`Version ${cfg.version.full}`, cfg.version.buildDate && `built ${cfg.version.buildDate}`].filter(Boolean).join(', ');
+      }
       renderMethod();
       computeOptions();
     } catch (e) { showError(`Could not connect to Genesys Cloud: ${e.message}`); }

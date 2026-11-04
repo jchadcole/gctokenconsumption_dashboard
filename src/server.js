@@ -7,8 +7,11 @@ const { buildCatalog, CATEGORY } = require('./catalog');
 const usage = require('./usage');
 const { getBilling } = require('./billing');
 const mock = require('./mock');
+const version = require('./version');
 
 const app = express();
+app.disable('x-powered-by');
+app.use((req, res, next) => { res.setHeader('X-App-Version', version.full); next(); });
 const client = config.mock ? null : new GenesysClient(config);
 
 let catalogCache = null;
@@ -60,10 +63,12 @@ const wrap = (fn) => (req, res) => fn(req, res).catch((e) => {
   res.status(e.status && e.status < 500 ? e.status : 502).json({ error: e.message, path: e.path, details: e.body });
 });
 
-app.get('/api/health', (req, res) => res.json({ ok: true, mock: config.mock, region: config.region }));
+app.get('/api/health', (req, res) => res.json({ ok: true, version: version.version, mock: config.mock, region: config.region }));
+
+app.get('/api/version', (req, res) => res.json(version));
 
 app.get('/api/config', (req, res) => res.json({
-  mock: config.mock, region: config.region, timeZone: config.timeZone, rates: config.rates,
+  version, mock: config.mock, region: config.region, timeZone: config.timeZone, rates: config.rates,
   internalOverviewEnabled: config.enableInternalOverview,
 }));
 
@@ -126,7 +131,7 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 
 if (require.main === module) {
   app.listen(config.port, () => {
-    console.log(`Genesys token dashboard on http://localhost:${config.port} (${config.mock ? 'MOCK data' : `region ${config.region}`})`);
+    console.log(`Genesys token dashboard v${version.full} on http://localhost:${config.port} (${config.mock ? 'MOCK data' : `region ${config.region}`})`);
   });
 }
 

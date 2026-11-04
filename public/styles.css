@@ -48,6 +48,8 @@ h2 { font-size: 15px; margin: 0; font-weight: 600; }
 .topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 24px; background: var(--surface-1); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .brand { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .topbar-right { display: flex; gap: 8px; align-items: center; }
+.version { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; }
+.version:empty { display: none; }
 .badge { font-size: 12px; padding: 3px 8px; border-radius: 999px; background: var(--surface-2); color: var(--text-secondary); border: 1px solid var(--border); }
 .badge.mock { border-style: dashed; }
 

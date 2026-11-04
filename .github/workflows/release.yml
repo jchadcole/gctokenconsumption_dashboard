@@ -1,0 +1,36 @@
+name: Release
+
+# Publishes a GitHub release when a version tag (vX.Y.Z) is pushed.
+# Create the tag with: npm run release:patch | release:minor | release:major
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Check tag matches package.json
+        run: |
+          PKG="v$(node -p "require('./package.json').version")"
+          if [ "$PKG" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $PKG"; exit 1
+          fi
+      - name: Release notes from CHANGELOG.md
+        run: node scripts/release-notes.js "$GITHUB_REF_NAME" > release-notes.md
+      - name: Source archive
+        run: git archive --format=zip --prefix="genesys-token-dashboard-${GITHUB_REF_NAME}/" -o "genesys-token-dashboard-${GITHUB_REF_NAME}.zip" "$GITHUB_REF_NAME"
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md "genesys-token-dashboard-${GITHUB_REF_NAME}.zip"
