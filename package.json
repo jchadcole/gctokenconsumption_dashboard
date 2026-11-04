@@ -1,0 +1,17 @@
+{
+  "name": "genesys-token-dashboard",
+  "version": "0.1.0",
+  "description": "Genesys Cloud AI token consumption dashboard: Bots, Virtual Agents and Agentic Virtual Agents",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "mock": "GENESYS_MOCK=1 node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2"
+  }
+}
