@@ -199,10 +199,28 @@ function flowRow(group, data, day) {
 // highest-tier rule see every bot a conversation used.
 //   GET /api/v2/analytics/botflows/{botFlowId}/sessions?interval=..&pageSize=250&after=..
 const CHANNEL_MEDIA = { call: 'voice', chat: 'chat', messaging: 'message' };
-async function fetchBotFlowSessions(client, botFlowIds, start, end, timeZone, maxDays) {
+async function fetchBotFlowSessions(client, botFlowIds, start, end, timeZone, maxDays, { concurrency = 4 } = {}) {
   const rows = [];
+  const failed = [];
   const intervals = chunkIntervals(start, end, maxDays, timeZone);
-  for (const flowId of botFlowIds) {
+  const queue = [...botFlowIds];
+  const worker = async () => {
+    while (queue.length) {
+      const flowId = queue.shift();
+      try {
+        rows.push(...await fetchOneFlowSessions(client, flowId, intervals, start, end, timeZone));
+      } catch (e) {
+        failed.push({ flowId, error: e });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, botFlowIds.length) }, worker));
+  return { rows, failed };
+}
+
+async function fetchOneFlowSessions(client, flowId, intervals, start, end, timeZone) {
+  const rows = [];
+  {
     for (const interval of intervals) {
       let after;
       for (let page = 0; page < 400; page++) {
@@ -411,6 +429,7 @@ function summarize(rows, granularity, start, end, rates) {
 }
 
 async function getUsage({ client, catalog, config, start, end }) {
+  console.log(`[usage] reading ${start}..${end} from Genesys Cloud`);
   const tz = config.timeZone;
   const intervals = chunkIntervals(start, end, config.maxDaysPerQuery, tz);
   const botFlowIds = catalog.flows.filter((f) => f.isBotFlow).map((f) => f.id);
@@ -422,15 +441,14 @@ async function getUsage({ client, catalog, config, start, end }) {
   // Daily bot totals: turn counts, bot products, and third-party bots that are not Architect flows.
   const daily = (await fetchAggregateRows(client, intervals, tz, [])).map((r) => ({ ...r, conversationId: null }));
 
-  let raw;
-  try {
-    const sessions = await fetchBotFlowSessions(client, botFlowIds, start, end, tz, config.maxDaysPerQuery);
-    raw = [...allocateTurns(sessions, daily.filter((r) => botFlowSet.has(r.flowId))), ...daily.filter((r) => !botFlowSet.has(r.flowId))];
-  } catch (e) {
-    if (!isClientError(e)) throw e;
-    warnings.push(`Bot session details unavailable (${e.message}). Bot usage is shown as daily totals, so per-call rounding is estimated and the highest-tier rule is not applied.`);
-    raw = daily;
+  // Only bot flows with activity in the range need their sessions read.
+  const active = [...new Set(daily.filter((r) => botFlowSet.has(r.flowId) && r.sessions > 0).map((r) => r.flowId))];
+  const { rows: sessions, failed } = await fetchBotFlowSessions(client, active, start, end, tz, config.maxDaysPerQuery);
+  if (failed.length) {
+    const names = new Map(catalog.flows.map((f) => [f.id, f.name]));
+    warnings.push(`Bot session details unavailable for ${failed.map((f) => names.get(f.flowId) || f.flowId).join(', ')} (${failed[0].error.message}). Those bots are shown as daily totals, so per-call rounding is estimated and the highest-tier rule is not applied to them.`);
   }
+  const raw = [...allocateTurns(sessions, daily.filter((r) => botFlowSet.has(r.flowId))), ...daily.filter((r) => !botFlowSet.has(r.flowId))];
 
   try {
     raw.push(...await fetchFlowConversationRows(client, start, end, tz, avaHostFlowIds));
@@ -439,6 +457,7 @@ async function getUsage({ client, catalog, config, start, end }) {
     warnings.push(`Per-conversation data for flows with an AVA is unavailable (${e.message}). Those AVA sessions are billed from daily totals, without the highest-tier rule.`);
     raw.push(...(await fetchAggregateRows(client, intervals, tz, avaHostFlowIds)).filter((r) => !r.botProduct && avaHostFlowIds.includes(r.flowId)).map((r) => ({ ...r, conversationId: null })));
   }
+  console.log(`[usage] ${start}..${end}: ${active.length} active bot flows, ${sessions.length} bot sessions read`);
   warnings.forEach((w) => console.warn('[usage]', w));
   const rows = computeRows(raw, catalog, config.rates);
   rows.warning = warnings.join(' ') || null;

@@ -75,3 +75,23 @@ test('turns from the daily aggregate are spread over that flow-day\'s sessions',
   assert.deepEqual(out.map((r) => r.turns), [5, 5, 3]);
   assert.equal(out[2].conversationId, null);
 });
+
+test('only bot flows with activity are queried, and one failing flow does not hide the others', async () => {
+  const cat = { flows: [...catalog.flows, { id: 'idle', name: 'Idle bot', category: 'bot', isBotFlow: true, flowType: 'bot', avas: [] }] };
+  const asked = [];
+  const client = {
+    async post(path) { return path.includes('/bots/') ? { results: [aggRow('jcc', 'CALL', 2, 2), aggRow('va', 'CALL', 1, 1)] } : { results: [] }; },
+    async get(path) {
+      const flowId = path.split('/')[5];
+      asked.push(flowId);
+      if (flowId === 'va') throw Object.assign(new Error('boom'), { status: 500 });
+      return { entities: [session(0, 'jcc', 'c1', 1000), session(1, 'jcc', 'c2', 1000)] };
+    },
+  };
+  const rows = await u.getUsage({ client, catalog: cat, config, start: '2026-11-05', end: '2026-11-05' });
+  assert.ok(!asked.includes('idle'));
+  assert.match(rows.warning, /VA flow/);
+  const s = u.summarize(rows, 'day', '2026-11-05', '2026-11-05', rates);
+  assert.equal(s.byFlow.find((f) => f.flowId === 'jcc').conversations, 2);
+  assert.equal(s.totals.va.sessions, 1);
+});
