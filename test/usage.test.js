@@ -127,3 +127,19 @@ test('filters and time series', () => {
   close(s.series[2].ava, 1.2);
   assert.equal(s.mode, 'conversation');
 });
+
+test('voice bot sessions reported with media type CALL are voice: 17 sub-second calls = 17 x 15 s', () => {
+  const calls = Array.from({ length: 17 }, (_, i) => row(`call${i}`, 'vbot', { mediaType: 'CALL', durationMs: 800, turns: 1 }));
+  const t = total(calls);
+  assert.equal(t.bot.digitalTurns, 0);
+  assert.equal(t.bot.voiceSeconds, 255);        // 17 x 15 s
+  assert.equal(t.bot.voiceMinutesRounded, 5);   // 4.25 min rounded up
+  close(t.bot.tokens, 5 / 17);
+});
+
+test('a voice bot flow is voice even when analytics media type is unexpected', () => {
+  const t = total([row('c1', 'vbot', { mediaType: 'unknown', durationMs: 1000 })]);
+  assert.equal(t.bot.voiceSeconds, 15);
+  const d = total([row('c2', 'dbot', { mediaType: 'CALL', turns: 51 })]);
+  close(d.bot.tokens, 1);
+});

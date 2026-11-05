@@ -17,7 +17,9 @@ const { CATEGORY } = require('./catalog');
 
 // Bot products that are Genesys Architect bot flows and therefore token-metered.
 const METERED_BOT_PRODUCTS = new Set(['GenesysBotFlow', 'GenesysDigitalBotFlow']);
-const VOICE_MEDIA = new Set(['voice', 'callback']);
+// Analytics reports voice as "CALL" for bot sessions and "voice" elsewhere; compare case-insensitively.
+const VOICE_MEDIA = new Set(['voice', 'call', 'callback']);
+const VOICE_BOT_PRODUCTS = new Set(['GenesysBotFlow']);
 
 // ---------- dates ----------
 function tzOffset(dateStr, timeZone) {
@@ -69,7 +71,13 @@ function bucketOf(day, granularity) {
 // ---------- token rules ----------
 // Tier order for "highest level of AI used" (rule 5).
 const TIER = { [CATEGORY.BOT]: 1, [CATEGORY.VA]: 2, [CATEGORY.AVA]: 3 };
-const isVoice = (mediaType) => VOICE_MEDIA.has(mediaType);
+// A row is voice when its flow is a voice bot flow (Architect type "bot"), its bot product is the
+// voice bot flow product, or its media type is a voice media type. Digital bot flows are never voice.
+function isVoiceRow(r) {
+  if (r.flowType === 'digitalbot') return false;
+  if (r.flowType === 'bot' || VOICE_BOT_PRODUCTS.has(r.botProduct)) return true;
+  return VOICE_MEDIA.has(String(r.mediaType || '').toLowerCase());
+}
 
 // Rule 1: each voice-bot call is billed in increments (15 s), rounded up.
 function billedCallSeconds(durationMs, rates) {
@@ -84,7 +92,7 @@ function rowTokens(r, rates) {
   if (!r.metered) return 0;
   if (r.category === CATEGORY.AVA) return r.billableSessions * rates.avaTokensPerSession;            // rule 4
   if (r.category === CATEGORY.VA) return r.billableSessions / rates.virtualAgentSessionsPerToken;     // rule 3
-  if (isVoice(r.mediaType)) return r.billedSeconds / 60 / rates.voiceBotMinutesPerToken;              // rule 1
+  if (isVoiceRow(r)) return r.billedSeconds / 60 / rates.voiceBotMinutesPerToken;              // rule 1
   return r.billableTurns / rates.digitalBotTurnsPerToken;                                             // rule 2
 }
 
@@ -99,7 +107,7 @@ function applyHighestTier(convRows, rates) {
   }
   return convRows.map((r) => {
     const billable = r.metered && TIER[r.category] === top.get(r.conversationId);
-    const voiceBot = billable && r.category === CATEGORY.BOT && isVoice(r.mediaType);
+    const voiceBot = billable && r.category === CATEGORY.BOT && isVoiceRow(r);
     const out = {
       ...r,
       billableSessions: billable ? r.sessions : 0,
@@ -116,7 +124,7 @@ function applyHighestTier(convRows, rates) {
 // per-call rounding is estimated as half an increment per call.
 function applyAggregateRules(rows, rates) {
   return rows.map((r) => {
-    const voiceBot = r.metered && r.category === CATEGORY.BOT && isVoice(r.mediaType);
+    const voiceBot = r.metered && r.category === CATEGORY.BOT && isVoiceRow(r);
     const out = {
       ...r,
       billableSessions: r.metered ? r.sessions : 0,
@@ -285,7 +293,7 @@ function summarize(rows, granularity, start, end, rates) {
     t.sessions += r.sessions; t.billableSessions += r.billableSessions; t.turns += r.turns;
     t.minutes += r.minutes; t.tokens += r.tokens; t.absorbedSessions += r.absorbedSessions;
     if (r.category === CATEGORY.BOT && r.metered) {
-      if (isVoice(r.mediaType)) voiceSeconds += r.billedSeconds; else digitalTurns += r.billableTurns;
+      if (isVoiceRow(r)) voiceSeconds += r.billedSeconds; else digitalTurns += r.billableTurns;
     }
   }
   // Rule 1: total voice-bot time is rounded up to a whole minute before dividing by 17.
