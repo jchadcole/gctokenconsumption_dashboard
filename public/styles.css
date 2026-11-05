@@ -146,6 +146,7 @@ td .sub { display: block; font-size: 11px; color: var(--text-muted); }
 .bar { position: relative; min-width: 120px; height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
 .bar span { position: absolute; inset: 0 auto 0 0; background: var(--c); border-radius: 0 4px 4px 0; }
 tfoot td { font-weight: 600; border-bottom: 0; }
+tfoot tr.note td { font-weight: 400; padding-top: 4px; }
 
 .billing-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; }
 .wallet { background: var(--surface-2); border-radius: 8px; padding: 12px 14px; }

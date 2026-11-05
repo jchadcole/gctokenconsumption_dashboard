@@ -143,3 +143,13 @@ test('a voice bot flow is voice even when analytics media type is unexpected', (
   const d = total([row('c2', 'dbot', { mediaType: 'CALL', turns: 51 })]);
   close(d.bot.tokens, 1);
 });
+
+test('each flow row counts the conversations that reached it', () => {
+  const rows = u.computeRows([
+    row('c1', 'vbot', { sessions: 2, durationMs: 500 }), row('c2', 'vbot', { sessions: 2, durationMs: 500 }),
+  ], catalog, rates);
+  const s = u.summarize(rows, 'day', '2026-11-03', '2026-11-03', rates);
+  assert.equal(s.byFlow[0].conversations, 2);
+  assert.equal(s.byFlow[0].sessions, 4);
+  assert.equal(s.byFlow[0].minutes, 0.5); // 2 calls x 15 s
+});

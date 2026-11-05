@@ -10,7 +10,13 @@
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmt = (n, d = 0) => (n === null || n === undefined || Number.isNaN(n) ? '–' : Number(n).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d }));
-  const fmtTok = (n) => fmt(n, Math.abs(n) < 100 ? 1 : 0);
+  const fmtTok = (n) => fmt(n, Math.abs(n) < 10 ? 2 : Math.abs(n) < 100 ? 1 : 0);
+  // Voice time as minutes:seconds, e.g. 4.25 -> "4:15", so it is never confused with whole billed minutes.
+  const fmtMin = (m) => {
+    if (m === null || m === undefined || Number.isNaN(m)) return '–';
+    const total = Math.round(m * 60);
+    return `${Math.floor(total / 60).toLocaleString()}:${String(total % 60).padStart(2, '0')}`;
+  };
   const compact = (n) => (Math.abs(n) >= 1000 ? Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n) : fmt(n, n < 10 && n % 1 ? 1 : 0));
   const iso = (d) => d.toISOString().slice(0, 10);
   const today = () => iso(new Date());
@@ -227,7 +233,7 @@
     const active = (id) => !state.categories.length || state.categories.includes(id);
     const share = CATS.map((c) => total ? `<span style="width:${(s.totals[c.id].tokens / total) * 100}%;background:${c.color}" title="${c.label}"></span>` : '').join('');
     const subs = {
-      bot: (t) => `${fmt(t.voiceMinutesRounded)} voice min · ${fmt(t.digitalTurns)} digital turns`,
+      bot: (t) => `${fmt(t.voiceMinutesRounded)} billed voice min${t.minutes ? ` (${fmtMin(t.minutes)} after 15 s rounding)` : ''} · ${fmt(t.digitalTurns)} digital turns`,
       va: (t) => `${fmt(t.billableSessions)} billed sessions${t.absorbedSessions ? ` · ${fmt(t.absorbedSessions)} escalated to AVA` : ''}`,
       ava: (t) => `${fmt(t.billableSessions)} billed sessions`,
     };
@@ -320,7 +326,7 @@
   let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => lastUsage && renderChart(lastUsage.summary.series), 120); });
 
   // ---------- table ----------
-  const NUM_COLS = [{ key: 'sessions', label: 'Sessions', num: true }, { key: 'turns', label: 'Turns', num: true }, { key: 'minutes', label: 'Voice min', num: true }, { key: 'absorbedSessions', label: 'Escalated', num: true, title: 'Sessions not billed because the same conversation reached a higher tier' }, { key: 'tokens', label: 'Tokens', num: true, tok: true }];
+  const NUM_COLS = [{ key: 'conversations', label: 'Conversations', num: true, title: 'Calls or digital conversations that reached this flow', blankIfAggregate: true }, { key: 'sessions', label: 'Bot sessions', num: true, title: 'Bot sessions reported by Genesys analytics (a call can have more than one)' }, { key: 'turns', label: 'Turns', num: true }, { key: 'minutes', label: 'Voice time', num: true, min: true, title: 'Voice-bot time after rounding each call up to 15 s, in minutes:seconds. The total is rounded up to whole billed minutes in the Bots tile.' }, { key: 'absorbedSessions', label: 'Escalated', num: true, title: 'Sessions not billed because the same conversation reached a higher tier' }, { key: 'tokens', label: 'Tokens', num: true, tok: true }];
   const TABLES = {
     byFlow: {
       cols: [
@@ -349,16 +355,22 @@
     const total = rows.reduce((s, r) => s + r.tokens, 0);
     const maxTok = Math.max(0, ...rows.map((r) => r.tokens));
     const head = `<thead><tr>${def.cols.map((c) => `<th data-k="${c.key}" class="${c.num ? 'num' : ''}" ${c.title ? `title="${esc(c.title)}"` : ''} ${key === c.key ? `aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : ''}>${c.label}</th>`).join('')}<th>Share</th></tr></thead>`;
-    const cell = (c, r) => (c.render ? c.render(r) : c.num ? (c.tok ? fmtTok(r[c.key]) : fmt(r[c.key])) : esc(r[c.key]));
+    const agg = lastUsage?.summary.mode === 'aggregate';
+    const numText = (c, v) => (c.blankIfAggregate && agg ? '–' : c.min ? fmtMin(v) : c.tok ? fmtTok(v) : fmt(v));
+    const cell = (c, r) => (c.render ? c.render(r) : c.num ? numText(c, r[c.key]) : esc(r[c.key]));
     const color = (r) => (r.category ? CAT[r.category].color : 'var(--accent)');
     const body = rows.length ? rows.map((r, i) => `<tr class="click" data-i="${i}" tabindex="0">${def.cols.map((c) => `<td class="${c.num ? 'num' : ''}">${cell(c, r)}</td>`).join('')}
       <td><div class="bar" title="${fmt(total ? (r.tokens / total) * 100 : 0, 1)}%"><span style="width:${maxTok ? (r.tokens / maxTok) * 100 : 0}%;--c:${color(r)}"></span></div></td></tr>`).join('')
       : `<tr><td colspan="${def.cols.length + 1}" class="muted">No data for these filters.</td></tr>`;
-    const sums = Object.fromEntries(['sessions', 'turns', 'minutes', 'absorbedSessions'].map((k) => [k, rows.reduce((s, r) => s + (r[k] || 0), 0)]));
+    const sums = Object.fromEntries(['conversations', 'sessions', 'turns', 'minutes', 'absorbedSessions'].map((k) => [k, rows.reduce((s, r) => s + (r[k] || 0), 0)]));
     sums.tokens = total;
-    const adj = lastUsage?.summary.totals.bot.roundingAdjustment || 0;
-    const note = Math.abs(adj) > 1e-9 ? `<tr class="note"><td colspan="${def.cols.length + 1}" class="muted small">Voice-bot total rounded up to a whole minute: +${fmt(adj, 3)} tokens in the totals above, not in these rows.</td></tr>` : '';
-    const foot = rows.length > 1 ? `<tfoot>${note}<tr>${def.cols.map((c, i) => `<td class="${c.num ? 'num' : ''}">${i === 0 ? 'Total' : c.num ? (c.tok ? fmtTok(sums[c.key]) : fmt(sums[c.key])) : ''}</td>`).join('')}<td></td></tr></tfoot>` : '';
+    const bt = lastUsage?.summary.totals.bot;
+    const rates = cfg?.rates;
+    const note = bt && rates && bt.voiceSeconds > 0
+      ? `<tr class="note"><td colspan="${def.cols.length + 1}" class="muted small">Voice bots: ${fmtMin(bt.voiceSeconds / 60)} of voice time is rounded up to ${fmt(bt.voiceMinutesRounded)} billed minutes, and ${fmt(bt.voiceMinutesRounded)} ÷ ${rates.voiceBotMinutesPerToken} = ${fmtTok(bt.voiceTokens)} tokens. That rounding is in the tiles above, so row tokens can add up to slightly less.</td></tr>`
+      : '';
+    const totalRow = rows.length > 1 ? `<tr>${def.cols.map((c, i) => `<td class="${c.num ? 'num' : ''}">${i === 0 ? 'Total' : c.num ? numText(c, sums[c.key]) : ''}</td>`).join('')}<td></td></tr>` : '';
+    const foot = note || totalRow ? `<tfoot>${totalRow}${note}</tfoot>` : '';
     const t = $('#table');
     t.innerHTML = head + `<tbody>${body}</tbody>` + foot;
     t.querySelectorAll('th[data-k]').forEach((th) => th.onclick = () => {

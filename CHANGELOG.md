@@ -11,6 +11,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- The Bots tile and the breakdown rows disagreed on voice minutes (5 vs 4), because rows rounded 4.25 for display. Rows now show voice time as minutes:seconds after 15 s rounding (4:15). The tile shows billed minutes after rounding the total up (5), and a note under the table spells out the calculation. Token values under 10 now show two decimals.
+- The breakdown has a Conversations column, so calls are counted separately from the bot sessions Genesys reports.
 - Voice bot calls were counted as digital turns because Genesys reports their media type as `CALL`. Any voice bot flow (Architect type `bot`) is now billed as voice.
 
 ### Changed

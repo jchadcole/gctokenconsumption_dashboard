@@ -110,6 +110,7 @@ function applyHighestTier(convRows, rates) {
     const voiceBot = billable && r.category === CATEGORY.BOT && isVoiceRow(r);
     const out = {
       ...r,
+      conversations: 1,
       billableSessions: billable ? r.sessions : 0,
       billableTurns: billable ? r.turns : 0,
       absorbedSessions: r.metered && !billable ? r.sessions : 0,
@@ -137,7 +138,7 @@ function applyAggregateRules(rows, rates) {
   });
 }
 
-const SUM_FIELDS = ['sessions', 'turns', 'durationMs', 'billedSeconds', 'billableSessions', 'billableTurns', 'absorbedSessions', 'tokens'];
+const SUM_FIELDS = ['conversations', 'sessions', 'turns', 'durationMs', 'billedSeconds', 'billableSessions', 'billableTurns', 'absorbedSessions', 'tokens'];
 
 // Drop the conversation dimension once the rules are applied: one row per day / flow / media / language.
 function collapse(rows) {
@@ -272,7 +273,7 @@ function applyFilters(rows, f) {
     (f.includeUnmetered || r.metered));
 }
 
-const GROUP_FIELDS = ['sessions', 'turns', 'minutes', 'tokens', 'absorbedSessions', 'billableSessions', 'billableTurns'];
+const GROUP_FIELDS = ['conversations', 'sessions', 'turns', 'minutes', 'tokens', 'absorbedSessions', 'billableSessions', 'billableTurns'];
 function groupSum(rows, keyFn, extra = () => ({})) {
   const m = new Map();
   for (const r of rows) {
