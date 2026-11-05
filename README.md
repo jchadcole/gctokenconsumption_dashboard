@@ -24,9 +24,9 @@ Filters: date range (presets or custom), granularity, type (Bot / VA / AVA), div
 | 4 | Agentic Virtual Agent | Any flow that contains an AVA block (found through Architect dependency tracking) | 1.2 tokens per session, whatever its length |
 | 5 | All | | A call or digital conversation consumes tokens only for the highest level of AI it reached. Bot → Virtual Agent costs 0.5; bot → Virtual Agent → AVA costs 1.2. |
 
-To apply rule 5, usage is read per conversation: the bot and flow aggregate queries are grouped by `conversationId`, one query per day. Each conversation's highest tier is found, only the sessions at that tier are billed, and the lower-tier sessions are reported as "Escalated". The minute rounding in rule 1 is applied to the voice-bot total for the selected filters, so the KPI can differ from the sum of the rows by a fraction of a token.
+To apply rules 1 and 5 exactly, each bot session is read from the bot flow sessions endpoint, which gives its conversation and start and end times. Each call's duration is rounded up to 15 s, and each conversation's highest tier is found. Only the sessions at that tier are billed. Lower-tier sessions are reported as "Escalated". The sessions endpoint has no turn counts, so each flow's daily turns (from the bot aggregate) are spread evenly over that day's sessions. Entries into non-bot flows that contain an AVA are read per conversation from the flow aggregate. The minute rounding in rule 1 is applied to the voice-bot total for the selected filters, so the KPI can differ from the sum of the rows by a fraction of a token.
 
-The rates can be changed in `.env` if your contract differs. If an org rejects conversation-level grouping, the app falls back to daily totals, says so on the page, and cannot apply rule 5 in that mode.
+The rates can be changed in `.env` if your contract differs. If an org rejects one of these queries, the app falls back to daily totals for that part and says so on the page. Rule 5 cannot be applied to daily totals.
 
 Genesys Cloud does not publish an API that splits token usage by bot, so these figures are calculated from analytics. The billing section shows the official org-level totals to compare against. Third-party bots reached through Bot Connector (Amazon Lex, Google Dialogflow) appear in analytics but are not charged Genesys bot tokens. Bot aggregates have no queue dimension, and division comes from the flow's division.
 
@@ -39,7 +39,8 @@ Genesys Cloud does not publish an API that splits token usage by bot, so these f
 | Agentic Virtual Agents | `GET /api/v2/agentic/virtualagents` |
 | Flows that embed each AVA | `GET /api/v2/architect/dependencytracking/consumingresources?objectType=AGENTICVIRTUALAGENT` |
 | Division names | `GET /api/v2/authorization/divisions`, `GET /api/v2/flows/divisionviews` |
-| Bot sessions, duration and turns per conversation, bot, product, media, language | `POST /api/v2/analytics/bots/aggregates/query` |
+| Each bot session with its conversation, channel and start/end time (per-call rounding, highest-tier rule) | `GET /api/v2/analytics/botflows/{botFlowId}/sessions` |
+| Daily bot turns, bot products, third-party bots | `POST /api/v2/analytics/bots/aggregates/query` |
 | Entries per conversation into non-bot flows that contain an AVA | `POST /api/v2/analytics/flows/aggregates/query` |
 | Official token charges and wallet | `GET /api/v2/billing/contracts`, `GET /api/v2/billing/contracts/{id}/billingperiods/{periodId}` |
 | Optional, unsupported | `GET /api/v2/billing/subscriptionoverview` (the internal endpoint the Admin UI uses; off by default) |
@@ -48,7 +49,7 @@ Genesys Cloud does not publish an API that splits token usage by bot, so these f
 
 1. In Genesys Cloud Admin, create an **OAuth client** with grant type **Client Credentials**, and give it a role with view permissions for:
    - Architect: flows and dependency tracking
-   - Analytics: bot aggregates and flow aggregates
+   - Analytics: bot aggregates, flow aggregates and bot flow sessions
    - AI Studio / Agentic Virtual Agents: view
    - Authorization: divisions (view)
    - Billing: contracts (view), for the "Billed tokens" section

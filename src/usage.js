@@ -194,22 +194,81 @@ function flowRow(group, data, day) {
   };
 }
 
-// Per-conversation usage, one query per day so each response stays small.
-async function fetchConversationRows(client, start, end, timeZone, avaHostFlowIds) {
+// One row per bot session, from the bot flow sessions endpoint. Each session carries its
+// conversation id and start/end times, which gives exact per-call durations and lets the
+// highest-tier rule see every bot a conversation used.
+//   GET /api/v2/analytics/botflows/{botFlowId}/sessions?interval=..&pageSize=250&after=..
+const CHANNEL_MEDIA = { call: 'voice', chat: 'chat', messaging: 'message' };
+async function fetchBotFlowSessions(client, botFlowIds, start, end, timeZone, maxDays) {
   const rows = [];
+  const intervals = chunkIntervals(start, end, maxDays, timeZone);
+  for (const flowId of botFlowIds) {
+    for (const interval of intervals) {
+      let after;
+      for (let page = 0; page < 400; page++) {
+        const res = await client.get(`/api/v2/analytics/botflows/${encodeURIComponent(flowId)}/sessions`, { interval, pageSize: 250, after });
+        for (const ses of res.entities || []) {
+          if (!ses.dateCreated) continue;
+          const day = localDate(ses.dateCreated, timeZone);
+          if (day < start || day > end) continue;
+          const created = Date.parse(ses.dateCreated);
+          const completed = ses.dateCompleted ? Date.parse(ses.dateCompleted) : created;
+          const channel = String(ses.channel?.name || '').toLowerCase();
+          rows.push({
+            day,
+            conversationId: ses.conversation?.id || `session:${ses.id}`,
+            sessionId: ses.id,
+            flowId: ses.flow?.id || flowId,
+            botProduct: null,
+            mediaType: CHANNEL_MEDIA[channel] || channel || 'unknown',
+            language: ses.language || ses.endLanguage || null,
+            sessions: 1,
+            durationMs: Math.max(0, completed - created),
+            turns: 0,
+          });
+        }
+        after = res.nextUri ? new URL(res.nextUri, 'https://x').searchParams.get('after') : null;
+        if (!after || !(res.entities || []).length) break;
+      }
+    }
+  }
+  return rows;
+}
+
+// The sessions endpoint has no turn counts, so each flow-day's turns (from the daily bot aggregate)
+// are spread evenly over that flow-day's sessions. Aggregate rows with no matching sessions are kept
+// as daily totals so nothing is dropped.
+function allocateTurns(sessionRows, aggRows) {
+  const key = (r) => `${r.flowId}|${r.day}`;
+  const count = new Map();
+  for (const r of sessionRows) count.set(key(r), (count.get(key(r)) || 0) + 1);
+  const agg = new Map();
+  for (const r of aggRows) {
+    const g = agg.get(key(r)) || { turns: 0, botProduct: r.botProduct };
+    g.turns += r.turns;
+    agg.set(key(r), g);
+  }
+  const out = sessionRows.map((r) => {
+    const g = agg.get(key(r));
+    return { ...r, turns: g ? g.turns / count.get(key(r)) : 0, botProduct: r.botProduct || g?.botProduct || null };
+  });
+  const leftovers = aggRows.filter((r) => !count.has(key(r))).map((r) => ({ ...r, conversationId: null }));
+  return [...out, ...leftovers];
+}
+
+// Per-conversation entries into non-bot flows that contain an AVA block, one query per day.
+async function fetchFlowConversationRows(client, start, end, timeZone, flowIds) {
+  const rows = [];
+  if (!flowIds.length) return rows;
   for (let day = start; day <= end; day = addDays(day, 1)) {
     const next = addDays(day, 1);
     const interval = `${day}T00:00:00${tzOffset(day, timeZone)}/${next}T00:00:00${tzOffset(next, timeZone)}`;
-    const bots = await client.post('/api/v2/analytics/bots/aggregates/query', {
-      interval, timeZone, groupBy: ['conversationId', 'botId', 'botProduct', 'mediaType', 'languageCode'], metrics: BOT_METRICS,
-    });
-    for (const r of bots.results || []) for (const d of r.data || []) rows.push(botRow(r.group, d, day));
-    for (let i = 0; i < avaHostFlowIds.length; i += 50) {
-      const flows = await client.post('/api/v2/analytics/flows/aggregates/query', {
+    for (let i = 0; i < flowIds.length; i += 50) {
+      const res = await client.post('/api/v2/analytics/flows/aggregates/query', {
         interval, timeZone, groupBy: ['conversationId', 'flowId', 'mediaType', 'divisionId'], metrics: ['nFlow'],
-        filter: flowPredicates(avaHostFlowIds.slice(i, i + 50)),
+        filter: flowPredicates(flowIds.slice(i, i + 50)),
       });
-      for (const r of flows.results || []) for (const d of r.data || []) rows.push(flowRow(r.group, d, day));
+      for (const r of res.results || []) for (const d of r.data || []) rows.push(flowRow(r.group, d, day));
     }
   }
   return rows;
@@ -254,11 +313,16 @@ function enrich(rawRows, catalog) {
 }
 
 // raw rows -> rows with tokens. Uses the per-conversation rules when rows carry a conversationId.
+// raw rows -> rows with tokens. Rows that carry a conversationId get the per-conversation rules
+// (exact per-call rounding, highest tier only); rows without one are billed as daily totals.
 function computeRows(rawRows, catalog, rates) {
   const enriched = enrich(rawRows, catalog);
-  const perConversation = enriched.length > 0 && enriched.every((r) => r.conversationId);
-  return collapse(perConversation ? applyHighestTier(enriched, rates) : applyAggregateRules(enriched, rates))
-    .map((r) => ({ ...r, mode: perConversation ? 'conversation' : 'aggregate' }));
+  const conv = enriched.filter((r) => r.conversationId);
+  const daily = enriched.filter((r) => !r.conversationId);
+  return [
+    ...collapse(applyHighestTier(conv, rates)).map((r) => ({ ...r, mode: 'conversation' })),
+    ...collapse(applyAggregateRules(daily, rates)).map((r) => ({ ...r, mode: 'aggregate', conversations: null })),
+  ];
 }
 
 function applyFilters(rows, f) {
@@ -322,7 +386,7 @@ function summarize(rows, granularity, start, end, rates) {
     const i = idx.get(bucketOf(r.day, granularity));
     if (i !== undefined) series[i][r.category] += r.tokens;
   }
-  const modes = [...new Set(rows.map((r) => r.mode).filter(Boolean))];
+  const modes = [...new Set(rows.filter((r) => r.metered).map((r) => r.mode).filter(Boolean))];
   return {
     totals: {
       ...totals,
@@ -335,7 +399,7 @@ function summarize(rows, granularity, start, end, rates) {
     mode: modes.length === 1 ? modes[0] : modes.length ? 'mixed' : null,
     series,
     byFlow: groupSum(rows, (r) => r.flowId, (r) => ({
-      flowId: r.flowId, name: r.flowName, category: r.category, flowType: r.flowType, mediaType: r.mediaType,
+      flowId: r.flowId, name: r.flowName, category: r.category, flowType: r.flowType, mediaType: r.mediaType, mode: r.mode,
       divisionName: r.divisionName, avaNames: r.avaNames, metered: r.metered,
     })),
     byDivision: groupSum(rows, (r) => r.divisionId || '__none__', (r) => ({ name: r.divisionName || '(unknown)' })),
@@ -347,24 +411,41 @@ function summarize(rows, granularity, start, end, rates) {
 }
 
 async function getUsage({ client, catalog, config, start, end }) {
+  const tz = config.timeZone;
+  const intervals = chunkIntervals(start, end, config.maxDaysPerQuery, tz);
+  const botFlowIds = catalog.flows.filter((f) => f.isBotFlow).map((f) => f.id);
+  const botFlowSet = new Set(botFlowIds);
   const avaHostFlowIds = catalog.flows.filter((f) => !f.isBotFlow && f.category === CATEGORY.AVA).map((f) => f.id);
-  let raw; let warning = null;
+  const warnings = [];
+  const isClientError = (e) => e.status >= 400 && e.status < 500 && e.status !== 401;
+
+  // Daily bot totals: turn counts, bot products, and third-party bots that are not Architect flows.
+  const daily = (await fetchAggregateRows(client, intervals, tz, [])).map((r) => ({ ...r, conversationId: null }));
+
+  let raw;
   try {
-    raw = await fetchConversationRows(client, start, end, config.timeZone, avaHostFlowIds);
+    const sessions = await fetchBotFlowSessions(client, botFlowIds, start, end, tz, config.maxDaysPerQuery);
+    raw = [...allocateTurns(sessions, daily.filter((r) => botFlowSet.has(r.flowId))), ...daily.filter((r) => !botFlowSet.has(r.flowId))];
   } catch (e) {
-    if (!(e.status >= 400 && e.status < 500) || e.status === 401 || e.status === 403) throw e;
-    // e.g. the org rejects conversation-level grouping: fall back to daily totals.
-    warning = `Per-conversation analytics unavailable (${e.message}). Showing daily totals without the highest-tier rule.`;
-    console.warn('[usage]', warning);
-    raw = await fetchAggregateRows(client, chunkIntervals(start, end, config.maxDaysPerQuery, config.timeZone), config.timeZone, avaHostFlowIds);
-    raw.forEach((r) => { r.conversationId = null; });
+    if (!isClientError(e)) throw e;
+    warnings.push(`Bot session details unavailable (${e.message}). Bot usage is shown as daily totals, so per-call rounding is estimated and the highest-tier rule is not applied.`);
+    raw = daily;
   }
+
+  try {
+    raw.push(...await fetchFlowConversationRows(client, start, end, tz, avaHostFlowIds));
+  } catch (e) {
+    if (!isClientError(e)) throw e;
+    warnings.push(`Per-conversation data for flows with an AVA is unavailable (${e.message}). Those AVA sessions are billed from daily totals, without the highest-tier rule.`);
+    raw.push(...(await fetchAggregateRows(client, intervals, tz, avaHostFlowIds)).filter((r) => !r.botProduct && avaHostFlowIds.includes(r.flowId)).map((r) => ({ ...r, conversationId: null })));
+  }
+  warnings.forEach((w) => console.warn('[usage]', w));
   const rows = computeRows(raw, catalog, config.rates);
-  rows.warning = warning;
+  rows.warning = warnings.join(' ') || null;
   return rows;
 }
 
 module.exports = {
-  getUsage, computeRows, enrich, applyHighestTier, applyAggregateRules, collapse, billedCallSeconds, rowTokens,
+  getUsage, computeRows, fetchBotFlowSessions, allocateTurns, enrich, applyHighestTier, applyAggregateRules, collapse, billedCallSeconds, rowTokens,
   applyFilters, summarize, chunkIntervals, tzOffset, bucketOf, addDays, METERED_BOT_PRODUCTS,
 };

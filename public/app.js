@@ -356,8 +356,8 @@
     const maxTok = Math.max(0, ...rows.map((r) => r.tokens));
     const head = `<thead><tr>${def.cols.map((c) => `<th data-k="${c.key}" class="${c.num ? 'num' : ''}" ${c.title ? `title="${esc(c.title)}"` : ''} ${key === c.key ? `aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : ''}>${c.label}</th>`).join('')}<th>Share</th></tr></thead>`;
     const agg = lastUsage?.summary.mode === 'aggregate';
-    const numText = (c, v) => (c.blankIfAggregate && agg ? '–' : c.min ? fmtMin(v) : c.tok ? fmtTok(v) : fmt(v));
-    const cell = (c, r) => (c.render ? c.render(r) : c.num ? numText(c, r[c.key]) : esc(r[c.key]));
+    const numText = (c, v, r) => (c.blankIfAggregate && (agg || r?.mode === 'aggregate') ? '–' : c.min ? fmtMin(v) : c.tok ? fmtTok(v) : fmt(v));
+    const cell = (c, r) => (c.render ? c.render(r) : c.num ? numText(c, r[c.key], r) : esc(r[c.key]));
     const color = (r) => (r.category ? CAT[r.category].color : 'var(--accent)');
     const body = rows.length ? rows.map((r, i) => `<tr class="click" data-i="${i}" tabindex="0">${def.cols.map((c) => `<td class="${c.num ? 'num' : ''}">${cell(c, r)}</td>`).join('')}
       <td><div class="bar" title="${fmt(total ? (r.tokens / total) * 100 : 0, 1)}%"><span style="width:${maxTok ? (r.tokens / maxTok) * 100 : 0}%;--c:${color(r)}"></span></div></td></tr>`).join('')
@@ -424,7 +424,7 @@
       </tbody></table></div>
       <ul>
         <li><b>Highest tier only.</b> A call or digital conversation consumes tokens only for the highest level of AI it reached. A bot that escalates to a Virtual Agent costs one Virtual Agent session; bot to Virtual Agent to AVA costs one AVA session. The lower-tier sessions still appear in the tables under "Escalated" but bill nothing.</li>
-        ${lastUsage?.summary.mode === 'aggregate' ? '<li><b>Fallback in use:</b> per-conversation data was not available, so the highest-tier rule could not be applied and voice rounding is estimated at half an increment per call.</li>' : ''}
+        ${['aggregate', 'mixed'].includes(lastUsage?.summary.mode) ? '<li><b>Fallback in use for some data:</b> per-conversation data was not available, so the highest-tier rule could not be applied and voice rounding is estimated at half an increment per call.</li>' : ''}
         <li>The minute rounding applies to the voice-bot total for the selected filters, so the KPI and the rows can differ by a fraction of a token.</li>
         <li>Third-party bots reached through Bot Connector (for example Amazon Lex or Google Dialogflow) appear in analytics but are not charged Genesys bot tokens. Tick "Show non-metered bots" to list them.</li>
         <li>Days are bucketed in ${esc(cfg.timeZone)}. Rates come from server settings and can be changed in <code>.env</code>.</li>

@@ -11,6 +11,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Orgs that reject grouping bot aggregates by conversation (seen on GenesysSC12) fell back to daily totals, which turned off the highest-tier rule and estimated the 15 s rounding. Bot usage now comes from the bot flow sessions endpoint, one record per session with its conversation and start/end time. That also fixes calls showing twice the bot sessions.
+- The billing section no longer tells you to add a permission when the contracts API returns a non-permission error.
 - The Bots tile and the breakdown rows disagreed on voice minutes (5 vs 4), because rows rounded 4.25 for display. Rows now show voice time as minutes:seconds after 15 s rounding (4:15). The tile shows billed minutes after rounding the total up (5), and a note under the table spells out the calculation. Token values under 10 now show two decimals.
 - The breakdown has a Conversations column, so calls are counted separately from the bot sessions Genesys reports.
 - Voice bot calls were counted as digital turns because Genesys reports their media type as `CALL`. Any voice bot flow (Architect type `bot`) is now billed as voice.

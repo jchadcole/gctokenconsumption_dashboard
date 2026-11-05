@@ -17,7 +17,9 @@ async function getBilling(client, { start, end, includeInternal = false }) {
   try {
     contracts = await client.getAllCursor('/api/v2/billing/contracts', { pageSize: 10 });
   } catch (e) {
-    out.errors.push(`Billing contracts unavailable (${e.status || ''}): ${e.message}. The OAuth client needs the billing contract view permission.`);
+    out.errors.push(e.status === 403
+      ? `Billing contracts: the OAuth client is missing a billing permission (${e.message}).`
+      : `Billing contracts unavailable: ${e.message}. Genesys's Contract & Billing API may not be enabled for this org yet; this is not fixed by adding role permissions. Set ENABLE_INTERNAL_SUBSCRIPTION_OVERVIEW=1 to try the endpoint the Admin billing page uses.`);
   }
   for (const c of contracts) {
     let detail = c;
