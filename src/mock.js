@@ -47,28 +47,47 @@ function mockCatalog() {
   return { org: { id: 'mock-org', name: 'Sample Org (mock data)' }, flows, avas: AVAS, divisions: DIVS, builtAt: new Date().toISOString() };
 }
 
+// Escalations within one conversation, to exercise the highest-tier rule: [fromFlow, toFlow, share]
+const ESCALATIONS = [
+  ['f-track-voice', 'f-holdmail-va', 0.2],   // voice bot -> Virtual Agent
+  ['f-track-chat', 'f-claims-ava', 0.12],    // digital bot -> AVA
+  ['f-stamps-va', 'f-claims-ava', 0.1],      // Virtual Agent -> AVA
+  ['f-redeliver-in', 'f-hours-voice', 0.35], // inbound flow with AVA also runs a voice bot
+];
+const SCALE = 0.25; // conversations per unit of daily volume, keeps mock data light
+
+// Per-conversation rows, shaped like the bot / flow aggregate queries grouped by conversationId.
 function mockRawRows(start, end) {
   const rows = [];
+  const flow = Object.fromEntries(FLOWS.map((f) => [f[0], f]));
+  const sessionRow = (d, convId, id, r) => {
+    const [, , flowType, , , , isBotFlow, media, , lang] = flow[id];
+    return {
+      day: d, conversationId: convId, flowId: id,
+      botProduct: !isBotFlow ? null : flowType === 'bot' ? 'GenesysBotFlow' : 'GenesysDigitalBotFlow',
+      mediaType: media, language: lang, sessions: 1,
+      durationMs: media === 'voice' ? Math.round((25 + r() * 160) * 1000) : 0,
+      turns: isBotFlow ? 1 + Math.floor(r() * 6) : 0,
+    };
+  };
   for (let d = start; d <= end; d = addDays(d, 1)) {
     const dow = new Date(`${d}T00:00:00Z`).getUTCDay();
     const weekday = dow === 0 ? 0.45 : dow === 6 ? 0.65 : 1;
     const dayIndex = Math.round((new Date(`${d}T00:00:00Z`) - new Date('2026-01-01T00:00:00Z')) / 86400000);
     const trend = 1 + dayIndex * 0.0012;
-    for (const [id, , flowType, , , , isBotFlow, media, vol, lang] of FLOWS) {
+    for (const [id, , , , , , , , vol] of FLOWS) {
       const r = rng(id + d);
-      const sessions = Math.max(0, Math.round(vol * weekday * trend * (0.8 + r() * 0.4)));
-      const avgSec = media === 'voice' ? 70 + r() * 80 : 0;
-      rows.push({
-        day: d, flowId: id,
-        botProduct: !isBotFlow ? null : flowType === 'bot' ? 'GenesysBotFlow' : 'GenesysDigitalBotFlow',
-        mediaType: media, language: lang, sessions,
-        durationMs: Math.round(sessions * avgSec * 1000),
-        turns: isBotFlow ? Math.round(sessions * (2 + r() * 3)) : 0,
-      });
+      const n = Math.max(0, Math.round(vol * SCALE * weekday * trend * (0.8 + r() * 0.4)));
+      for (let i = 0; i < n; i++) {
+        const convId = `${d}-${id}-${i}`;
+        rows.push(sessionRow(d, convId, id, r));
+        for (const [from, to, share] of ESCALATIONS) if (from === id && r() < share) rows.push(sessionRow(d, convId, to, r));
+      }
     }
     // Third-party bot via Bot Connector: shows up in analytics, not charged as Genesys tokens.
     const r = rng('lex' + d);
-    rows.push({ day: d, flowId: 'lex-faq-bot', botProduct: 'AmazonLex', mediaType: 'voice', language: 'en-us', sessions: Math.round(120 * weekday * (0.8 + r() * 0.4)), durationMs: 0, turns: 0 });
+    const n = Math.round(30 * weekday * (0.8 + r() * 0.4));
+    for (let i = 0; i < n; i++) rows.push({ day: d, conversationId: `${d}-lex-${i}`, flowId: 'lex-faq-bot', botProduct: 'AmazonLex', mediaType: 'voice', language: 'en-us', sessions: 1, durationMs: 60000, turns: 3 });
   }
   return rows;
 }
@@ -83,7 +102,7 @@ function mockBilling(start, end, estimateTokens) {
       contractId: 'C-000123', contractNumber: 'C-000123', id: 'bp-mock', dateStart: periodStart, dateEnd: lastDayOfMonth(periodStart), status: 'Open',
       tokenCharges: [
         { name: 'Genesys Cloud Bot Flows - Voice (minutes)', sku: 'SAMPLE', unitOfMeasure: 'Minute', actualQuantity: null, tokens: Math.round(estimateTokens.botVoice), tokenConversionRate: 1 / 17 },
-        { name: 'Genesys Cloud Bot Flows - Digital (sessions)', sku: 'SAMPLE', unitOfMeasure: 'Session', actualQuantity: null, tokens: Math.round(estimateTokens.botDigital), tokenConversionRate: 1 / 51 },
+        { name: 'Genesys Cloud Bot Flows - Digital (turns)', sku: 'SAMPLE', unitOfMeasure: 'Turn', actualQuantity: null, tokens: Math.round(estimateTokens.botDigital), tokenConversionRate: 1 / 51 },
         { name: 'Genesys Cloud Virtual Agent', sku: 'SAMPLE', unitOfMeasure: 'Interaction', actualQuantity: null, tokens: Math.round(estimateTokens.va), tokenConversionRate: 0.5 },
         { name: 'Genesys Cloud Agentic Virtual Agent', sku: 'SAMPLE', unitOfMeasure: 'Interaction', actualQuantity: null, tokens: Math.round(estimateTokens.ava), tokenConversionRate: 1.2 },
         { name: 'Agent Copilot', sku: 'SAMPLE', unitOfMeasure: 'Concurrent User', actualQuantity: 40, tokens: 2400, tokenConversionRate: 60 },

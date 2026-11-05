@@ -14,23 +14,21 @@ A small Node.js web app that pulls Genesys Cloud usage through the Platform API 
 
 Filters: date range (presets or custom), granularity, type (Bot / VA / AVA), division, bot or flow, media type, language, bot product, and an option to include third-party bots that are not charged Genesys tokens. Filter state lives in the URL, so a drill-down view can be bookmarked or shared.
 
-## Why "estimated"
+## Token rules
 
-Genesys Cloud does not publish an API that splits token usage by bot. The billing API gives official totals per product for the whole org, and the analytics APIs give usage per bot. This app joins the two:
+| # | Type | How it is identified | Rule |
+|---|---|---|---|
+| 1 | Voice bot | Architect voice bot flow with no Virtual Agent and no AVA | Each call is billed in 15 s increments, rounded up. All calls are totaled, rounded up to a whole minute, and divided by 17. |
+| 2 | Digital bot | Digital bot flow with no Virtual Agent and no AVA | Prompt/response turns ÷ 51 |
+| 3 | Virtual Agent | Bot flow with `virtualAgentEnabled = true` | Sessions ÷ 2, whatever their length (0.5 per session) |
+| 4 | Agentic Virtual Agent | Any flow that contains an AVA block (found through Architect dependency tracking) | 1.2 tokens per session, whatever its length |
+| 5 | All | | A call or digital conversation consumes tokens only for the highest level of AI it reached. Bot → Virtual Agent costs 0.5; bot → Virtual Agent → AVA costs 1.2. |
 
-| Type | How it is identified | Token rate (default) |
-|---|---|---|
-| Bot | Architect bot / digital bot flow with no Virtual Agent and no AVA | Voice: 17 minutes per token, each call rounded up to 15 s. Digital: 51 sessions per token |
-| Virtual Agent | Bot flow with `virtualAgentEnabled = true` | 0.5 tokens per interaction |
-| Agentic Virtual Agent | Any flow that contains an AVA block (found through Architect dependency tracking) | 1.2 tokens per interaction |
+To apply rule 5, usage is read per conversation: the bot and flow aggregate queries are grouped by `conversationId`, one query per day. Each conversation's highest tier is found, only the sessions at that tier are billed, and the lower-tier sessions are reported as "Escalated". The minute rounding in rule 1 is applied to the voice-bot total for the selected filters, so the KPI can differ from the sum of the rows by a fraction of a token.
 
-Rates come from the [Genesys Cloud tokens model](https://help.genesys.cloud/articles/genesys-cloud-tokens-model/) and the [AI resource consumption billing scenarios](https://help.genesys.cloud/articles/virtual-agent-and-agentic-virtual-agent-billing-scenarios/). Override them in `.env` if your contract differs.
+The rates can be changed in `.env` if your contract differs. If an org rejects conversation-level grouping, the app falls back to daily totals, says so on the page, and cannot apply rule 5 in that mode.
 
-Known limits of the estimate:
-
-- Genesys bills an interaction once at the highest tier it touched. Analytics aggregates count each flow separately, so an interaction that passes through two token-consuming flows (for example an inbound flow with an AVA block that then calls a VA bot flow) is counted twice.
-- Voice rounding to 15 s is applied per call by Genesys. Analytics only returns total duration, so the app adds half an increment per call.
-- Bot aggregates have no queue or division dimension. Division comes from the flow's division. Queue is not available for bot usage.
+Genesys Cloud does not publish an API that splits token usage by bot, so these figures are calculated from analytics. The billing section shows the official org-level totals to compare against. Third-party bots reached through Bot Connector (Amazon Lex, Google Dialogflow) appear in analytics but are not charged Genesys bot tokens. Bot aggregates have no queue dimension, and division comes from the flow's division.
 
 ## Genesys Cloud APIs used
 
@@ -41,8 +39,8 @@ Known limits of the estimate:
 | Agentic Virtual Agents | `GET /api/v2/agentic/virtualagents` |
 | Flows that embed each AVA | `GET /api/v2/architect/dependencytracking/consumingresources?objectType=AGENTICVIRTUALAGENT` |
 | Division names | `GET /api/v2/authorization/divisions`, `GET /api/v2/flows/divisionviews` |
-| Bot sessions, duration, turns by bot, product, media, language | `POST /api/v2/analytics/bots/aggregates/query` |
-| Entries into non-bot flows that contain an AVA | `POST /api/v2/analytics/flows/aggregates/query` |
+| Bot sessions, duration and turns per conversation, bot, product, media, language | `POST /api/v2/analytics/bots/aggregates/query` |
+| Entries per conversation into non-bot flows that contain an AVA | `POST /api/v2/analytics/flows/aggregates/query` |
 | Official token charges and wallet | `GET /api/v2/billing/contracts`, `GET /api/v2/billing/contracts/{id}/billingperiods/{periodId}` |
 | Optional, unsupported | `GET /api/v2/billing/subscriptionoverview` (the internal endpoint the Admin UI uses; off by default) |
 
@@ -96,7 +94,7 @@ All settings are environment variables; see `.env.example`. The useful ones beyo
 - `REPORT_TIMEZONE`: IANA time zone used for daily buckets (default `UTC`).
 - `ANALYTICS_MAX_DAYS`: long ranges are split into chunks of this many days per analytics query (default 31).
 - `CATALOG_CACHE_MINUTES`: how long the flow / AVA catalog is cached (default 15). The "Refresh catalog" button forces a reload.
-- `RATE_*`: token rates.
+- `RATE_*`: token rules 1 to 4 (rule 5 is always on).
 - `ENABLE_INTERNAL_SUBSCRIPTION_OVERVIEW=1`: also call the undocumented subscription overview endpoint and show its raw response.
 
 ## Project layout

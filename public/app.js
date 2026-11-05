@@ -211,13 +211,13 @@
     const active = (id) => !state.categories.length || state.categories.includes(id);
     const share = CATS.map((c) => total ? `<span style="width:${(s.totals[c.id].tokens / total) * 100}%;background:${c.color}" title="${c.label}"></span>` : '').join('');
     const subs = {
-      bot: (t) => `${fmt(t.sessions)} sessions · ${fmt(t.minutes)} voice min`,
-      va: (t) => `${fmt(t.sessions)} interactions`,
-      ava: (t) => `${fmt(t.sessions)} interactions`,
+      bot: (t) => `${fmt(t.voiceMinutesRounded)} voice min · ${fmt(t.digitalTurns)} digital turns`,
+      va: (t) => `${fmt(t.billableSessions)} billed sessions${t.absorbedSessions ? ` · ${fmt(t.absorbedSessions)} escalated to AVA` : ''}`,
+      ava: (t) => `${fmt(t.billableSessions)} billed sessions`,
     };
     $('#kpis').innerHTML = `
       <div class="kpi total"><div class="k-label">Estimated tokens, all types</div>
-        <div class="k-value">${fmtTok(total)}</div><div class="k-sub">${state.start} to ${state.end}</div>
+        <div class="k-value">${fmtTok(total)}</div><div class="k-sub">${state.start} to ${state.end}${s.totals.all.absorbedSessions ? ` · ${fmt(s.totals.all.absorbedSessions)} lower-tier sessions not billed` : ''}</div>
         <div class="share" aria-hidden="true">${share}</div></div>
       ${CATS.map((c) => {
         const t = s.totals[c.id];
@@ -304,21 +304,20 @@
   let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => lastUsage && renderChart(lastUsage.summary.series), 120); });
 
   // ---------- table ----------
+  const NUM_COLS = [{ key: 'sessions', label: 'Sessions', num: true }, { key: 'turns', label: 'Turns', num: true }, { key: 'minutes', label: 'Voice min', num: true }, { key: 'absorbedSessions', label: 'Escalated', num: true, title: 'Sessions not billed because the same conversation reached a higher tier' }, { key: 'tokens', label: 'Tokens', num: true, tok: true }];
   const TABLES = {
     byFlow: {
       cols: [
-        { key: 'name', label: 'Bot / flow', render: (r) => `${esc(r.name)}<span class="sub">${esc([r.flowType, r.divisionName].filter(Boolean).join(' · '))}${r.avaNames?.length ? ` · AVA: ${esc(r.avaNames.join(', '))}` : ''}${r.metered ? '' : ' · not token-metered'}</span>` },
+        { key: 'name', label: 'Bot / flow', render: (r) => `${esc(r.name)}<span class="sub">${esc([r.flowType, r.mediaType, r.divisionName].filter(Boolean).join(' · '))}${r.avaNames?.length ? ` · AVA: ${esc(r.avaNames.join(', '))}` : ''}${r.metered ? '' : ' · not token-metered'}</span>` },
         { key: 'category', label: 'Type', render: (r) => catTag(r.category) },
-        { key: 'sessions', label: 'Sessions / interactions', num: true },
-        { key: 'minutes', label: 'Voice minutes', num: true },
-        { key: 'tokens', label: 'Est. tokens', num: true, tok: true },
+        ...NUM_COLS,
       ],
       drill: (r) => { state.flowIds = [r.flowId]; },
     },
-    byDivision: { cols: [{ key: 'name', label: 'Division' }, { key: 'sessions', label: 'Sessions / interactions', num: true }, { key: 'minutes', label: 'Voice minutes', num: true }, { key: 'tokens', label: 'Est. tokens', num: true, tok: true }], drill: (r) => { state.divisionIds = [r.key]; } },
-    byCategoryMedia: { cols: [{ key: 'category', label: 'Type', render: (r) => catTag(r.category) }, { key: 'name', label: 'Media type' }, { key: 'sessions', label: 'Sessions / interactions', num: true }, { key: 'minutes', label: 'Voice minutes', num: true }, { key: 'tokens', label: 'Est. tokens', num: true, tok: true }], drill: (r) => { state.categories = [r.category]; state.mediaTypes = [r.name]; } },
-    byLanguage: { cols: [{ key: 'name', label: 'Language' }, { key: 'sessions', label: 'Sessions / interactions', num: true }, { key: 'minutes', label: 'Voice minutes', num: true }, { key: 'tokens', label: 'Est. tokens', num: true, tok: true }], drill: (r) => { if (r.key !== '__none__') state.languages = [r.key]; } },
-    byBotProduct: { cols: [{ key: 'name', label: 'Bot product' }, { key: 'sessions', label: 'Sessions / interactions', num: true }, { key: 'minutes', label: 'Voice minutes', num: true }, { key: 'tokens', label: 'Est. tokens', num: true, tok: true }], drill: (r) => { if (r.key !== '__none__') state.botProducts = [r.key]; } },
+    byDivision: { cols: [{ key: 'name', label: 'Division' }, ...NUM_COLS], drill: (r) => { state.divisionIds = [r.key]; } },
+    byCategoryMedia: { cols: [{ key: 'category', label: 'Type', render: (r) => catTag(r.category) }, { key: 'name', label: 'Media type' }, ...NUM_COLS], drill: (r) => { state.categories = [r.category]; state.mediaTypes = [r.name]; } },
+    byLanguage: { cols: [{ key: 'name', label: 'Language' }, ...NUM_COLS], drill: (r) => { if (r.key !== '__none__') state.languages = [r.key]; } },
+    byBotProduct: { cols: [{ key: 'name', label: 'Bot product' }, ...NUM_COLS], drill: (r) => { if (r.key !== '__none__') state.botProducts = [r.key]; } },
   };
   const catTag = (c) => `<span class="cat"><i style="--c:${CAT[c].color}"></i>${CAT[c].short}</span>`;
 
@@ -333,14 +332,17 @@
     });
     const total = rows.reduce((s, r) => s + r.tokens, 0);
     const maxTok = Math.max(0, ...rows.map((r) => r.tokens));
-    const head = `<thead><tr>${def.cols.map((c) => `<th data-k="${c.key}" class="${c.num ? 'num' : ''}" ${key === c.key ? `aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : ''}>${c.label}</th>`).join('')}<th>Share</th></tr></thead>`;
+    const head = `<thead><tr>${def.cols.map((c) => `<th data-k="${c.key}" class="${c.num ? 'num' : ''}" ${c.title ? `title="${esc(c.title)}"` : ''} ${key === c.key ? `aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : ''}>${c.label}</th>`).join('')}<th>Share</th></tr></thead>`;
     const cell = (c, r) => (c.render ? c.render(r) : c.num ? (c.tok ? fmtTok(r[c.key]) : fmt(r[c.key])) : esc(r[c.key]));
     const color = (r) => (r.category ? CAT[r.category].color : 'var(--accent)');
     const body = rows.length ? rows.map((r, i) => `<tr class="click" data-i="${i}" tabindex="0">${def.cols.map((c) => `<td class="${c.num ? 'num' : ''}">${cell(c, r)}</td>`).join('')}
       <td><div class="bar" title="${fmt(total ? (r.tokens / total) * 100 : 0, 1)}%"><span style="width:${maxTok ? (r.tokens / maxTok) * 100 : 0}%;--c:${color(r)}"></span></div></td></tr>`).join('')
       : `<tr><td colspan="${def.cols.length + 1}" class="muted">No data for these filters.</td></tr>`;
-    const sums = { sessions: rows.reduce((s, r) => s + r.sessions, 0), minutes: rows.reduce((s, r) => s + r.minutes, 0), tokens: total };
-    const foot = rows.length > 1 ? `<tfoot><tr>${def.cols.map((c, i) => `<td class="${c.num ? 'num' : ''}">${i === 0 ? 'Total' : c.num ? (c.tok ? fmtTok(sums[c.key]) : fmt(sums[c.key])) : ''}</td>`).join('')}<td></td></tr></tfoot>` : '';
+    const sums = Object.fromEntries(['sessions', 'turns', 'minutes', 'absorbedSessions'].map((k) => [k, rows.reduce((s, r) => s + (r[k] || 0), 0)]));
+    sums.tokens = total;
+    const adj = lastUsage?.summary.totals.bot.roundingAdjustment || 0;
+    const note = Math.abs(adj) > 1e-9 ? `<tr class="note"><td colspan="${def.cols.length + 1}" class="muted small">Voice-bot total rounded up to a whole minute: +${fmt(adj, 3)} tokens in the totals above, not in these rows.</td></tr>` : '';
+    const foot = rows.length > 1 ? `<tfoot>${note}<tr>${def.cols.map((c, i) => `<td class="${c.num ? 'num' : ''}">${i === 0 ? 'Total' : c.num ? (c.tok ? fmtTok(sums[c.key]) : fmt(sums[c.key])) : ''}</td>`).join('')}<td></td></tr></tfoot>` : '';
     const t = $('#table');
     t.innerHTML = head + `<tbody>${body}</tbody>` + foot;
     t.querySelectorAll('th[data-k]').forEach((th) => th.onclick = () => {
@@ -382,19 +384,22 @@
   }
 
   function renderMethod() {
+    if (!cfg) return;
     const r = cfg.rates;
     $('#method').innerHTML = `
-      <p>Genesys Cloud does not publish an API that splits token usage by bot, so this page counts bot sessions and interactions from the analytics APIs and applies the published token rates. Use the billing section above for the official org total.</p>
-      <div class="table-wrap"><table><thead><tr><th>Type</th><th>How it is identified</th><th>Rate applied</th></tr></thead><tbody>
-        <tr><td>${catTag('bot')}</td><td>Architect bot and digital bot flows without Virtual Agent or AVA</td><td>Voice: ${r.voiceBotMinutesPerToken} minutes per token, each call rounded up to ${r.voiceBotRoundSeconds} s. Digital: ${r.digitalBotSessionsPerToken} sessions per token.</td></tr>
-        <tr><td>${catTag('va')}</td><td>Bot flows with <code>virtualAgentEnabled</code></td><td>${r.virtualAgentTokensPerInteraction} tokens per interaction</td></tr>
-        <tr><td>${catTag('ava')}</td><td>Any flow that contains an Agentic Virtual Agent block (Architect dependency tracking)</td><td>${r.avaTokensPerInteraction} tokens per interaction</td></tr>
+      <p>Genesys Cloud does not publish an API that splits token usage by bot, so this page reads bot and flow usage per conversation from the analytics APIs and applies the rules below. Use the billing section above to compare with the official org total.</p>
+      <div class="table-wrap"><table><thead><tr><th>Type</th><th>How it is identified</th><th>Rule</th></tr></thead><tbody>
+        <tr><td>${catTag('bot')} voice</td><td>Architect voice bot flows without Virtual Agent or AVA</td><td>Each call billed in ${r.voiceBotIncrementSeconds} s increments, rounded up. All calls are totaled, rounded up to a whole minute, and divided by ${r.voiceBotMinutesPerToken}.</td></tr>
+        <tr><td>${catTag('bot')} digital</td><td>Digital bot flows without Virtual Agent or AVA</td><td>Prompt/response turns ÷ ${r.digitalBotTurnsPerToken}</td></tr>
+        <tr><td>${catTag('va')}</td><td>Bot flows with <code>virtualAgentEnabled</code></td><td>Sessions ÷ ${r.virtualAgentSessionsPerToken}, whatever their length (${fmt(1 / r.virtualAgentSessionsPerToken, 2)} per session)</td></tr>
+        <tr><td>${catTag('ava')}</td><td>Any flow that contains an Agentic Virtual Agent block (Architect dependency tracking)</td><td>${r.avaTokensPerSession} tokens per session, whatever its length</td></tr>
       </tbody></table></div>
       <ul>
-        <li>An interaction is billed once at the highest tier it touched (AVA, then Virtual Agent, then Bot). Analytics aggregates count each flow separately, so a single interaction that passes through two token-consuming flows is counted in both. Expect the estimate to run slightly above the invoice in that case.</li>
-        <li>Voice rounding is estimated as half an increment per call, because analytics returns total duration rather than each call.</li>
+        <li><b>Highest tier only.</b> A call or digital conversation consumes tokens only for the highest level of AI it reached. A bot that escalates to a Virtual Agent costs one Virtual Agent session; bot to Virtual Agent to AVA costs one AVA session. The lower-tier sessions still appear in the tables under "Escalated" but bill nothing.</li>
+        ${lastUsage?.summary.mode === 'aggregate' ? '<li><b>Fallback in use:</b> per-conversation data was not available, so the highest-tier rule could not be applied and voice rounding is estimated at half an increment per call.</li>' : ''}
+        <li>The minute rounding applies to the voice-bot total for the selected filters, so the KPI and the rows can differ by a fraction of a token.</li>
         <li>Third-party bots reached through Bot Connector (for example Amazon Lex or Google Dialogflow) appear in analytics but are not charged Genesys bot tokens. Tick "Show non-metered bots" to list them.</li>
-        <li>Days are bucketed in ${esc(cfg.timeZone)}. Rates come from server settings and can be changed in <code>.env</code> to match your contract.</li>
+        <li>Days are bucketed in ${esc(cfg.timeZone)}. Rates come from server settings and can be changed in <code>.env</code>.</li>
       </ul>`;
   }
 
@@ -410,10 +415,10 @@
     try {
       const u = await api(`/api/usage?${queryString(false)}`);
       if (my !== seq) return;
-      lastUsage = u; showError('');
+      lastUsage = u; showError(u.warning || '');
       computeOptions(u.filterOptions);
       renderActiveFilters();
-      renderKpis(u.summary); renderChart(u.summary.series); renderTable();
+      renderKpis(u.summary); renderChart(u.summary.series); renderTable(); renderMethod();
     } catch (e) {
       if (my === seq) showError(e.message);
     } finally {

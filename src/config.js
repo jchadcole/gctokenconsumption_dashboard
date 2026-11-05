@@ -21,11 +21,15 @@ const config = {
   catalogCacheMs: num('CATALOG_CACHE_MINUTES', 15) * 60 * 1000,
   enableInternalOverview: bool('ENABLE_INTERNAL_SUBSCRIPTION_OVERVIEW'),
   rates: {
+    // 1. Voice bots: 17 minutes per token, each call billed in 15 s increments, total rounded up to the minute
     voiceBotMinutesPerToken: num('RATE_VOICE_BOT_MINUTES_PER_TOKEN', 17),
-    voiceBotRoundSeconds: num('RATE_VOICE_BOT_ROUND_SECONDS', 15),
-    digitalBotSessionsPerToken: num('RATE_DIGITAL_BOT_SESSIONS_PER_TOKEN', 51),
-    virtualAgentTokensPerInteraction: num('RATE_VIRTUAL_AGENT_TOKENS_PER_INTERACTION', 0.5),
-    avaTokensPerInteraction: num('RATE_AVA_TOKENS_PER_INTERACTION', 1.2),
+    voiceBotIncrementSeconds: num('RATE_VOICE_BOT_INCREMENT_SECONDS', num('RATE_VOICE_BOT_ROUND_SECONDS', 15)),
+    // 2. Digital bots: 51 prompt/response turns per token
+    digitalBotTurnsPerToken: num('RATE_DIGITAL_BOT_TURNS_PER_TOKEN', num('RATE_DIGITAL_BOT_SESSIONS_PER_TOKEN', 51)),
+    // 3. Virtual Agents: 2 sessions per token
+    virtualAgentSessionsPerToken: num('RATE_VIRTUAL_AGENT_SESSIONS_PER_TOKEN', 2),
+    // 4. Agentic Virtual Agents: 1.2 tokens per session
+    avaTokensPerSession: num('RATE_AVA_TOKENS_PER_SESSION', num('RATE_AVA_TOKENS_PER_INTERACTION', 1.2)),
   },
 };
 

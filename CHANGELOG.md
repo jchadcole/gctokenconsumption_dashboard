@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+
+- Token calculation follows the USPS token rules: voice bots are billed per call in 15 s increments, with the total rounded up to a whole minute and divided by 17; digital bots by prompt/response turns ÷ 51; Virtual Agents by sessions ÷ 2; AVAs at 1.2 per session.
+- Each conversation consumes tokens only for the highest tier it reached (AVA > Virtual Agent > Bot). Usage is now read per conversation, and lower-tier sessions are shown as "Escalated".
+- New rate settings: `RATE_VOICE_BOT_INCREMENT_SECONDS`, `RATE_DIGITAL_BOT_TURNS_PER_TOKEN`, `RATE_VIRTUAL_AGENT_SESSIONS_PER_TOKEN`, `RATE_AVA_TOKENS_PER_SESSION`. The old names are still read.
+
 ## [1.0.0] - 2026-11-04
 
 ### Added

@@ -30,7 +30,7 @@ async function getRows(start, end, catalog) {
   const hit = usageCache.get(key);
   if (hit && Date.now() - hit.at < 5 * 60 * 1000) return hit.rows;
   const rows = config.mock
-    ? usage.enrich(mock.mockRawRows(start, end), catalog, config.rates)
+    ? usage.computeRows(mock.mockRawRows(start, end), catalog, config.rates)
     : await usage.getUsage({ client, catalog, config, start, end });
   usageCache.set(key, { at: Date.now(), rows });
   if (usageCache.size > 20) usageCache.delete(usageCache.keys().next().value);
@@ -81,7 +81,7 @@ app.get('/api/usage', wrap(async (req, res) => {
   const catalog = await getCatalog();
   const all = await getRows(q.start, q.end, catalog);
   const rows = usage.applyFilters(all, q.filters);
-  const summary = usage.summarize(rows, q.granularity, q.start, q.end);
+  const summary = usage.summarize(rows, q.granularity, q.start, q.end, config.rates);
   // Values present in the unfiltered data, used to populate the drill-down filter controls.
   const uniq = (fn) => [...new Set(all.map(fn).filter(Boolean))].sort();
   res.json({
@@ -93,6 +93,7 @@ app.get('/api/usage', wrap(async (req, res) => {
       botProducts: uniq((r) => r.botProduct),
       unmeteredFlows: [...new Set(all.filter((r) => !r.metered).map((r) => r.flowName))],
     },
+    warning: all.warning || null,
     rowCount: rows.length,
     generatedAt: new Date().toISOString(),
   });
@@ -102,7 +103,7 @@ app.get('/api/usage.csv', wrap(async (req, res) => {
   const q = parseQuery(req.query);
   const catalog = await getCatalog();
   const rows = usage.applyFilters(await getRows(q.start, q.end, catalog), q.filters);
-  const cols = ['day', 'category', 'flowName', 'flowId', 'flowType', 'divisionName', 'mediaType', 'language', 'botProduct', 'sessions', 'turns', 'minutes', 'tokens', 'metered', 'avaNames'];
+  const cols = ['day', 'category', 'flowName', 'flowId', 'flowType', 'divisionName', 'mediaType', 'language', 'botProduct', 'sessions', 'billableSessions', 'absorbedSessions', 'turns', 'billableTurns', 'durationMs', 'billedSeconds', 'minutes', 'tokens', 'metered', 'avaNames', 'mode'];
   const esc = (v) => {
     const s = Array.isArray(v) ? v.join('; ') : v === null || v === undefined ? '' : typeof v === 'number' ? String(Math.round(v * 1000) / 1000) : String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -117,11 +118,9 @@ app.get('/api/billing', wrap(async (req, res) => {
   if (config.mock) {
     const catalog = await getCatalog();
     const rows = usage.applyFilters(await getRows(`${q.end.slice(0, 7)}-01`, q.end, catalog), {});
-    const sum = (pred) => rows.filter(pred).reduce((s, r) => s + r.tokens, 0);
+    const t = usage.summarize(rows, 'month', `${q.end.slice(0, 7)}-01`, q.end, config.rates).totals;
     return res.json(mock.mockBilling(q.start, q.end, {
-      botVoice: sum((r) => r.category === 'bot' && r.mediaType === 'voice'),
-      botDigital: sum((r) => r.category === 'bot' && r.mediaType !== 'voice'),
-      va: sum((r) => r.category === 'va'), ava: sum((r) => r.category === 'ava'),
+      botVoice: t.bot.voiceTokens, botDigital: t.bot.digitalTokens, va: t.va.tokens, ava: t.ava.tokens,
     }));
   }
   res.json(await getBilling(client, { start: q.start, end: q.end, includeInternal: config.enableInternalOverview }));
