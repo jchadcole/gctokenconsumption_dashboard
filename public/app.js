@@ -173,9 +173,25 @@
     state.tab = b.dataset.t; state.sort = { key: 'tokens', dir: 'desc' };
     syncControls(); renderTable(); history.replaceState(null, '', `?${queryString(true)}`);
   };
-  $('#refreshCatalog').onclick = async () => {
-    try { catalog = await api('/api/catalog?refresh=1'); computeOptions(lastUsage?.filterOptions); refresh(); } catch (e) { showError(e.message); }
+  $('#refreshData').onclick = async () => {
+    const btn = $('#refreshData');
+    if (btn.disabled) return;
+    btn.disabled = true; btn.textContent = 'Refreshing…';
+    try {
+      await refresh({ force: true });
+      catalog = await api('/api/catalog');
+      computeOptions(lastUsage?.filterOptions);
+    } catch (e) { showError(e.message); } finally {
+      btn.disabled = false; btn.textContent = 'Refresh';
+    }
   };
+  function renderAsOf(iso) {
+    const el = $('#asOf');
+    if (!iso) { el.textContent = ''; return; }
+    const d = new Date(iso);
+    el.textContent = `Data as of ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
+    el.title = d.toLocaleString();
+  }
 
   function syncControls() {
     $('#preset').value = state.preset;
@@ -405,7 +421,7 @@
 
   // ---------- main ----------
   let seq = 0;
-  async function refresh() {
+  async function refresh({ force = false } = {}) {
     if (!state.start || !state.end) applyPreset(state.preset === 'custom' ? 'thisMonth' : state.preset);
     if (state.start > state.end) [state.start, state.end] = [state.end, state.start];
     syncControls();
@@ -413,9 +429,9 @@
     const my = ++seq;
     document.body.classList.add('loading');
     try {
-      const u = await api(`/api/usage?${queryString(false)}`);
+      const u = await api(`/api/usage?${queryString(false)}${force ? '&refresh=1' : ''}`);
       if (my !== seq) return;
-      lastUsage = u; showError(u.warning || '');
+      lastUsage = u; showError(u.warning || ''); renderAsOf(u.dataFetchedAt || u.generatedAt);
       computeOptions(u.filterOptions);
       renderActiveFilters();
       renderKpis(u.summary); renderChart(u.summary.series); renderTable(); renderMethod();

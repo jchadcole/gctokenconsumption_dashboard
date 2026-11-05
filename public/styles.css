@@ -47,15 +47,17 @@ h2 { font-size: 15px; margin: 0; font-weight: 600; }
 
 .topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 24px; background: var(--surface-1); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .brand { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-.topbar-right { display: flex; gap: 8px; align-items: center; }
+.topbar-right { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#asOf { white-space: nowrap; }
 .version { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; }
 .version:empty { display: none; }
-.badge { font-size: 12px; padding: 3px 8px; border-radius: 999px; background: var(--surface-2); color: var(--text-secondary); border: 1px solid var(--border); }
+.badge { white-space: nowrap; font-size: 12px; padding: 3px 8px; border-radius: 999px; background: var(--surface-2); color: var(--text-secondary); border: 1px solid var(--border); }
 .badge.mock { border-style: dashed; }
 
 .btn { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; text-decoration: none; display: inline-block; }
 .btn.ghost { background: transparent; color: var(--text-secondary); border-color: var(--border); }
 .btn:hover { filter: brightness(1.06); }
+.btn:disabled { opacity: .6; cursor: progress; }
 .btn:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .filters { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-end; padding: 14px 24px; background: var(--surface-1); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5; }

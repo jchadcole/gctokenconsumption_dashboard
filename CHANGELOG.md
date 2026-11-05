@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- **Refresh** button that re-fetches the flow catalog, usage and billing from Genesys Cloud instead of using the server caches, plus a "Data as of" time in the header.
+
 ### Changed
 
 - Token calculation follows the USPS token rules: voice bots are billed per call in 15 s increments, with the total rounded up to a whole minute and divided by 17; digital bots by prompt/response turns ÷ 51; Virtual Agents by sessions ÷ 2; AVAs at 1.2 per session.

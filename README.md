@@ -93,7 +93,7 @@ All settings are environment variables; see `.env.example`. The useful ones beyo
 
 - `REPORT_TIMEZONE`: IANA time zone used for daily buckets (default `UTC`).
 - `ANALYTICS_MAX_DAYS`: long ranges are split into chunks of this many days per analytics query (default 31).
-- `CATALOG_CACHE_MINUTES`: how long the flow / AVA catalog is cached (default 15). The "Refresh catalog" button forces a reload.
+- `CATALOG_CACHE_MINUTES`: how long the flow / AVA catalog is cached (default 15). Usage is cached for 5 minutes so filter changes are fast. The **Refresh** button in the header bypasses both caches and re-fetches everything from Genesys; the header shows when the data was fetched.
 - `RATE_*`: token rules 1 to 4 (rule 5 is always on).
 - `ENABLE_INTERNAL_SUBSCRIPTION_OVERVIEW=1`: also call the undocumented subscription overview endpoint and show its raw response.
 
@@ -115,7 +115,7 @@ test/             Unit tests (npm test)
 
 ## Local API
 
-- `GET /api/usage?start=YYYY-MM-DD&end=YYYY-MM-DD&granularity=day|week|month&categories=bot,va,ava&flowIds=&divisionIds=&mediaTypes=&languages=&botProducts=&includeUnmetered=1`
+- `GET /api/usage?refresh=1&start=YYYY-MM-DD&end=YYYY-MM-DD&granularity=day|week|month&categories=bot,va,ava&flowIds=&divisionIds=&mediaTypes=&languages=&botProducts=&includeUnmetered=1`
 - `GET /api/usage.csv?...` same parameters
 - `GET /api/billing?start=&end=`
 - `GET /api/catalog[?refresh=1]`

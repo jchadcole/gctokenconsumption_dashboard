@@ -16,22 +16,22 @@ const client = config.mock ? null : new GenesysClient(config);
 
 let catalogCache = null;
 async function getCatalog(force = false) {
-  if (config.mock) return mock.mockCatalog();
   if (!force && catalogCache && Date.now() - catalogCache.at < config.catalogCacheMs) return catalogCache.data;
-  const data = await buildCatalog(client);
+  const data = config.mock ? mock.mockCatalog() : await buildCatalog(client);
   catalogCache = { at: Date.now(), data };
   return data;
 }
 
 // Short-lived cache for raw usage so filter changes do not re-query Genesys.
 const usageCache = new Map();
-async function getRows(start, end, catalog) {
+async function getRows(start, end, catalog, { force = false } = {}) {
   const key = `${start}|${end}|${catalog.builtAt}`;
   const hit = usageCache.get(key);
-  if (hit && Date.now() - hit.at < 5 * 60 * 1000) return hit.rows;
+  if (!force && hit && Date.now() - hit.at < 5 * 60 * 1000) return hit.rows;
   const rows = config.mock
     ? usage.computeRows(mock.mockRawRows(start, end), catalog, config.rates)
     : await usage.getUsage({ client, catalog, config, start, end });
+  rows.fetchedAt = new Date().toISOString();
   usageCache.set(key, { at: Date.now(), rows });
   if (usageCache.size > 20) usageCache.delete(usageCache.keys().next().value);
   return rows;
@@ -78,8 +78,10 @@ app.get('/api/catalog', wrap(async (req, res) => {
 
 app.get('/api/usage', wrap(async (req, res) => {
   const q = parseQuery(req.query);
-  const catalog = await getCatalog();
-  const all = await getRows(q.start, q.end, catalog);
+  // refresh=1 (the Refresh button) re-reads the catalog and usage from Genesys instead of the caches.
+  const force = req.query.refresh === '1';
+  const catalog = await getCatalog(force);
+  const all = await getRows(q.start, q.end, catalog, { force });
   const rows = usage.applyFilters(all, q.filters);
   const summary = usage.summarize(rows, q.granularity, q.start, q.end, config.rates);
   // Values present in the unfiltered data, used to populate the drill-down filter controls.
@@ -96,6 +98,7 @@ app.get('/api/usage', wrap(async (req, res) => {
     warning: all.warning || null,
     rowCount: rows.length,
     generatedAt: new Date().toISOString(),
+    dataFetchedAt: all.fetchedAt || null,
   });
 }));
 
