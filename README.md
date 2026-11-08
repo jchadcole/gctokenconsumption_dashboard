@@ -54,13 +54,29 @@ Genesys Cloud does not publish an API that splits token usage by bot, so these f
    - Authorization: divisions (view)
    - Billing: contracts (view), for the "Billed tokens" section
    If a permission is missing, the API returns 403 and the dashboard shows the message, which names the missing permission. Sections that fail still let the rest of the page load.
-2. Copy `.env.example` to `.env` and fill in `GENESYS_CLIENT_ID`, `GENESYS_CLIENT_SECRET` and `GENESYS_REGION` (for example `mypurecloud.com`, `usw2.pure.cloud`, `use2.us-gov-pure.cloud` for FedRAMP orgs). Never commit `.env`.
+2. Give the app the OAuth client's credentials, either from 1Password (below) or in `.env`: copy `.env.example` to `.env` and fill in `GENESYS_CLIENT_ID`, `GENESYS_CLIENT_SECRET` and `GENESYS_REGION` (for example `mypurecloud.com`, `usw2.pure.cloud`, `use2.us-gov-pure.cloud` for FedRAMP orgs). Never commit `.env`.
 3. Install and run (Node 18 or later):
 
    ```bash
    npm install
    npm start          # http://localhost:3000
    ```
+
+### Credentials from 1Password
+
+The app can read the client ID and secret from 1Password through the [1Password CLI](https://developer.1password.com/docs/cli/) (`op`), the same way as the Custom AVA Reporting project. `.env.tpl` holds [secret references](https://developer.1password.com/docs/cli/secret-references/) instead of values, so it is safe to commit:
+
+```bash
+GENESYS_CLIENT_ID="op://Work/Genesys GenesysSC12/client_id"
+GENESYS_CLIENT_SECRET="op://Work/Genesys GenesysSC12/client_secret"
+GENESYS_REGION=mypurecloud.com
+```
+
+1. Install the CLI, turn on **Settings > Developer > Integrate with 1Password CLI** in the desktop app, and check you can read the item: `op read "op://Work/Genesys GenesysSC12/client_id"`.
+2. Change the vault, item or field names in `.env.tpl` if yours differ.
+3. Start the app with `npm run start:op`. That runs `op run --env-file=.env.tpl -- node src/server.js`, which resolves the references when the app starts. The secrets are never written to disk. Other settings still come from `.env` if you have one.
+
+You can also put `op://` references straight into `.env` and start with `op run --env-file=.env -- npm start`. If the app is started without `op run` while a credential still holds an `op://` reference, it stops with a message saying how to start it. On a server without the desktop app, set `OP_SERVICE_ACCOUNT_TOKEN` to a [service account](https://developer.1password.com/docs/service-accounts/) token with read access to the vault, and `op run` uses that.
 
 To try the UI without credentials, run `npm run mock`. It serves generated sample data and labels the page "Sample data".
 
@@ -72,6 +88,8 @@ docker build -t genesys-token-dashboard \
   --build-arg BUILD_COMMIT=$(git rev-parse --short HEAD) \
   --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) .
 docker run --env-file .env -p 3000:3000 genesys-token-dashboard
+# or with credentials from 1Password:
+op run --env-file=.env.tpl -- docker run -e GENESYS_CLIENT_ID -e GENESYS_CLIENT_SECRET -e GENESYS_REGION -p 3000:3000 genesys-token-dashboard
 ```
 
 ## Versioning
