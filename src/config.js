@@ -8,7 +8,19 @@ const num = (name, def) => {
   if (!Number.isFinite(n)) throw new Error(`${name} must be a number, got "${v}"`);
   return n;
 };
+// 1Password secret references (op://vault/item/field) are resolved by `op run`. If one reaches
+// the app as-is, the app was started without the 1Password CLI.
+const unresolvedRefs = (env = process.env) =>
+  ['GENESYS_CLIENT_ID', 'GENESYS_CLIENT_SECRET', 'GENESYS_REGION'].filter((k) => /^op:\/\//.test(String(env[k] || '').trim()));
+
 const bool = (name) => ['1', 'true', 'yes'].includes(String(process.env[name] || '').toLowerCase());
+
+const refs = unresolvedRefs();
+if (refs.length) {
+  throw new Error(`[config] ${refs.join(', ')} ${refs.length > 1 ? "still hold 1Password references" : "still holds a 1Password reference"} (op://...). `
+    + 'Start the app with the 1Password CLI so they are resolved: npm run start:op '
+    + '(or op run --env-file=.env -- npm start).');
+}
 
 const config = {
   clientId: process.env.GENESYS_CLIENT_ID || '',
@@ -39,3 +51,4 @@ if (!config.mock && (!config.clientId || !config.clientSecret)) {
 }
 
 module.exports = config;
+module.exports.unresolvedRefs = unresolvedRefs;

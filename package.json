@@ -6,6 +6,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node src/server.js",
+    "start:op": "op run --env-file=.env.tpl -- node src/server.js",
     "mock": "GENESYS_MOCK=1 node src/server.js",
     "test": "node --test test/*.test.js",
     "release:patch": "npm version patch -m \"Release v%s\"",
