@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Genesys Token Consumption</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>AI token consumption</h1>
+      <span id="org" class="muted"></span>
+      <span id="version" class="version" title=""></span>
+    </div>
+    <div class="topbar-right">
+      <span id="mode" class="badge"></span>
+      <span id="asOf" class="muted small" aria-live="polite"></span>
+      <button id="refreshData" class="btn" title="Re-fetch flows, Virtual Agents, AVAs, usage and billing from Genesys Cloud">Refresh</button>
+      <button id="themeToggle" class="btn ghost" aria-label="Toggle theme">Theme</button>
+    </div>
+  </header>
+
+  <section class="filters" aria-label="Filters">
+    <div class="field">
+      <label for="preset">Range</label>
+      <select id="preset">
+        <option value="thisMonth">This month</option>
+        <option value="lastMonth">Last month</option>
+        <option value="last7">Last 7 days</option>
+        <option value="last30">Last 30 days</option>
+        <option value="last90">Last 90 days</option>
+        <option value="custom">Custom</option>
+      </select>
+    </div>
+    <div class="field"><label for="start">From</label><input type="date" id="start"></div>
+    <div class="field"><label for="end">To</label><input type="date" id="end"></div>
+    <div class="field">
+      <span class="label">Group by</span>
+      <div class="seg" id="granularity" role="radiogroup">
+        <button data-v="day" class="on" role="radio">Day</button><button data-v="week" role="radio">Week</button><button data-v="month" role="radio">Month</button>
+      </div>
+    </div>
+    <div class="field"><span class="label">Type</span><div class="chips" id="categories"></div></div>
+    <div class="field" data-ms="divisionIds"><span class="label">Division</span></div>
+    <div class="field" data-ms="flowIds"><span class="label">Bot / flow</span></div>
+    <div class="field" data-ms="mediaTypes"><span class="label">Media</span></div>
+    <div class="field" data-ms="languages"><span class="label">Language</span></div>
+    <div class="field" data-ms="botProducts"><span class="label">Bot product</span></div>
+    <div class="field check"><label><input type="checkbox" id="includeUnmetered"> Show non-metered bots</label></div>
+    <div class="field actions">
+      <button id="reset" class="btn ghost">Reset</button>
+      <a id="csv" class="btn" href="#">Export CSV</a>
+    </div>
+  </section>
+
+  <div id="activeFilters" class="active-filters" aria-live="polite"></div>
+  <div id="error" class="error" hidden></div>
+
+  <main>
+    <section class="kpis" id="kpis" aria-label="Totals"></section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Estimated tokens over time</h2>
+        <div class="legend" id="legend"></div>
+      </div>
+      <div id="chart" class="chart" role="img" aria-label="Stacked bar chart of estimated tokens by type over time"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Breakdown</h2>
+        <div class="tabs" id="tabs" role="tablist">
+          <button data-t="byFlow" class="on" role="tab">Bot / flow</button>
+          <button data-t="byDivision" role="tab">Division</button>
+          <button data-t="byCategoryMedia" role="tab">Type × media</button>
+          <button data-t="byLanguage" role="tab">Language</button>
+          <button data-t="byBotProduct" role="tab">Bot product</button>
+        </div>
+      </div>
+      <p class="hint">Click a row to drill down to it.</p>
+      <div class="table-wrap"><table id="table"></table></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Billed tokens from your contract</h2>
+        <span class="muted small">Official org-level totals from the Genesys billing API</span>
+      </div>
+      <div id="billing"></div>
+    </section>
+
+    <section class="card method">
+      <h2>How the estimate is calculated</h2>
+      <div id="method"></div>
+    </section>
+  </main>
+
+  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
