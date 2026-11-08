@@ -151,5 +151,34 @@ test('each flow row counts the conversations that reached it', () => {
   const s = u.summarize(rows, 'day', '2026-11-03', '2026-11-03', rates);
   assert.equal(s.byFlow[0].conversations, 2);
   assert.equal(s.byFlow[0].sessions, 4);
-  assert.equal(s.byFlow[0].minutes, 0.5); // 2 calls x 15 s
+  assert.equal(s.byFlow[0].callMinutes, 0.5); // 2 calls x 15 s
+  assert.equal(s.byFlow[0].minutes, 1);       // rounded up to a whole billed minute
+});
+
+test('rows, chart and breakdowns carry the minute rounding and add up to the Bots tile', () => {
+  // Chad's case: 17 calls x 15 s = 4:15 -> 5 billed minutes -> 5/17 tokens, in every view
+  const one = u.computeRows(Array.from({ length: 17 }, (_, i) => row(`c${i}`, 'vbot', { mediaType: 'CALL', durationMs: 800 })), catalog, rates);
+  const s1 = u.summarize(one, 'day', '2026-11-03', '2026-11-03', rates);
+  close(s1.byFlow[0].tokens, 5 / 17);
+  close(s1.series[0].bot, 5 / 17);
+  close(s1.byMediaType[0].tokens, 5 / 17);
+  close(s1.totals.bot.tokens, 5 / 17);
+
+  // Two voice bots on two days: 90 s + 30 s = 2 min, shared 3:1 by billed seconds
+  const rows = u.computeRows([
+    row('a1', 'vbot', { durationMs: 90000 }),
+    { ...row('b1', 'vbot2', { durationMs: 20000 }), day: '2026-11-04' },
+  ], { flows: [...catalog.flows, { id: 'vbot2', name: 'Voice bot 2', category: 'bot', isBotFlow: true, flowType: 'bot', avas: [] }] }, rates);
+  const s = u.summarize(rows, 'day', '2026-11-03', '2026-11-04', rates);
+  assert.equal(s.totals.bot.voiceMinutesRounded, 2);
+  close(s.totals.bot.tokens, 2 / 17);
+  close(s.byFlow.find((f) => f.flowId === 'vbot').minutes, 1.5);
+  close(s.byFlow.find((f) => f.flowId === 'vbot2').minutes, 0.5);
+  for (const tab of ['byFlow', 'byDivision', 'byMediaType', 'byLanguage', 'byBotProduct', 'byCategoryMedia']) {
+    close(s[tab].reduce((a, r) => a + r.tokens, 0), s.totals.all.tokens);
+  }
+  close(s.series.reduce((a, b) => a + b.bot, 0), s.totals.bot.tokens);
+  // A drill-down shows the row's share, not a fresh rounding
+  const drill = u.summarize(u.applyFilters(rows, { flowIds: ['vbot2'] }), 'day', '2026-11-03', '2026-11-04', rates);
+  close(drill.totals.bot.tokens, s.byFlow.find((f) => f.flowId === 'vbot2').tokens);
 });

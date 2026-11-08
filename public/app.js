@@ -17,7 +17,9 @@
     const total = Math.round(m * 60);
     return `${Math.floor(total / 60).toLocaleString()}:${String(total % 60).padStart(2, '0')}`;
   };
-  const compact = (n) => (Math.abs(n) >= 1000 ? Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n) : fmt(n, n < 10 && n % 1 ? 1 : 0));
+  // Billed voice minutes: whole for a single range total, fractional for a row's share of it.
+  const fmtBilledMin = (m) => (m === null || m === undefined || Number.isNaN(m) ? '–' : Number(m).toLocaleString(undefined, { maximumFractionDigits: 2 }));
+  const compact = (n) => (Math.abs(n) >= 1000 ? Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n) : Number(n).toLocaleString(undefined, { maximumFractionDigits: Math.abs(n) < 1 ? 3 : Math.abs(n) < 10 ? 2 : 0 }));
   const iso = (d) => d.toISOString().slice(0, 10);
   const today = () => iso(new Date());
   const addDays = (s, n) => { const d = new Date(`${s}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return iso(d); };
@@ -233,7 +235,7 @@
     const active = (id) => !state.categories.length || state.categories.includes(id);
     const share = CATS.map((c) => total ? `<span style="width:${(s.totals[c.id].tokens / total) * 100}%;background:${c.color}" title="${c.label}"></span>` : '').join('');
     const subs = {
-      bot: (t) => `${fmt(t.voiceMinutesRounded)} billed voice min${t.minutes ? ` (${fmtMin(t.minutes)} after 15 s rounding)` : ''} · ${fmt(t.digitalTurns)} digital turns`,
+      bot: (t) => `${fmtBilledMin(t.voiceMinutesRounded)} billed voice min${t.callMinutes ? ` (${fmtMin(t.callMinutes)} of calls after 15 s rounding)` : ''} · ${fmt(t.digitalTurns)} digital turns`,
       va: (t) => `${fmt(t.billableSessions)} billed sessions${t.absorbedSessions ? ` · ${fmt(t.absorbedSessions)} escalated to AVA` : ''}`,
       ava: (t) => `${fmt(t.billableSessions)} billed sessions`,
     };
@@ -326,7 +328,7 @@
   let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => lastUsage && renderChart(lastUsage.summary.series), 120); });
 
   // ---------- table ----------
-  const NUM_COLS = [{ key: 'conversations', label: 'Conversations', num: true, title: 'Calls or digital conversations that reached this flow', blankIfAggregate: true }, { key: 'sessions', label: 'Bot sessions', num: true, title: 'Bot sessions reported by Genesys analytics (a call can have more than one)' }, { key: 'turns', label: 'Turns', num: true }, { key: 'minutes', label: 'Voice time', num: true, min: true, title: 'Voice-bot time after rounding each call up to 15 s, in minutes:seconds. The total is rounded up to whole billed minutes in the Bots tile.' }, { key: 'absorbedSessions', label: 'Escalated', num: true, title: 'Sessions not billed because the same conversation reached a higher tier' }, { key: 'tokens', label: 'Tokens', num: true, tok: true }];
+  const NUM_COLS = [{ key: 'conversations', label: 'Conversations', num: true, title: 'Calls or digital conversations that reached this flow', blankIfAggregate: true }, { key: 'sessions', label: 'Bot sessions', num: true, title: 'Bot sessions reported by Genesys analytics (a call can have more than one)' }, { key: 'turns', label: 'Turns', num: true }, { key: 'minutes', label: 'Billed voice min', num: true, billedMin: true, title: 'Billed voice-bot minutes: each call rounded up to 15 s, plus this row\'s share of rounding the range total up to a whole minute. Rows add up to the Bots tile.' }, { key: 'absorbedSessions', label: 'Escalated', num: true, title: 'Sessions not billed because the same conversation reached a higher tier' }, { key: 'tokens', label: 'Tokens', num: true, tok: true }];
   const TABLES = {
     byFlow: {
       cols: [
@@ -356,7 +358,7 @@
     const maxTok = Math.max(0, ...rows.map((r) => r.tokens));
     const head = `<thead><tr>${def.cols.map((c) => `<th data-k="${c.key}" class="${c.num ? 'num' : ''}" ${c.title ? `title="${esc(c.title)}"` : ''} ${key === c.key ? `aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : ''}>${c.label}</th>`).join('')}<th>Share</th></tr></thead>`;
     const agg = lastUsage?.summary.mode === 'aggregate';
-    const numText = (c, v, r) => (c.blankIfAggregate && (agg || r?.mode === 'aggregate') ? '–' : c.min ? fmtMin(v) : c.tok ? fmtTok(v) : fmt(v));
+    const numText = (c, v, r) => (c.blankIfAggregate && (agg || r?.mode === 'aggregate') ? '–' : c.billedMin ? fmtBilledMin(v) : c.min ? fmtMin(v) : c.tok ? fmtTok(v) : fmt(v));
     const cell = (c, r) => (c.render ? c.render(r) : c.num ? numText(c, r[c.key], r) : esc(r[c.key]));
     const color = (r) => (r.category ? CAT[r.category].color : 'var(--accent)');
     const body = rows.length ? rows.map((r, i) => `<tr class="click" data-i="${i}" tabindex="0">${def.cols.map((c) => `<td class="${c.num ? 'num' : ''}">${cell(c, r)}</td>`).join('')}
@@ -364,13 +366,8 @@
       : `<tr><td colspan="${def.cols.length + 1}" class="muted">No data for these filters.</td></tr>`;
     const sums = Object.fromEntries(['conversations', 'sessions', 'turns', 'minutes', 'absorbedSessions'].map((k) => [k, rows.reduce((s, r) => s + (r[k] || 0), 0)]));
     sums.tokens = total;
-    const bt = lastUsage?.summary.totals.bot;
-    const rates = cfg?.rates;
-    const note = bt && rates && bt.voiceSeconds > 0
-      ? `<tr class="note"><td colspan="${def.cols.length + 1}" class="muted small">Voice bots: ${fmtMin(bt.voiceSeconds / 60)} of voice time is rounded up to ${fmt(bt.voiceMinutesRounded)} billed minutes, and ${fmt(bt.voiceMinutesRounded)} ÷ ${rates.voiceBotMinutesPerToken} = ${fmtTok(bt.voiceTokens)} tokens. That rounding is in the tiles above, so row tokens can add up to slightly less.</td></tr>`
-      : '';
     const totalRow = rows.length > 1 ? `<tr>${def.cols.map((c, i) => `<td class="${c.num ? 'num' : ''}">${i === 0 ? 'Total' : c.num ? numText(c, sums[c.key]) : ''}</td>`).join('')}<td></td></tr>` : '';
-    const foot = note || totalRow ? `<tfoot>${totalRow}${note}</tfoot>` : '';
+    const foot = totalRow ? `<tfoot>${totalRow}</tfoot>` : '';
     const t = $('#table');
     t.innerHTML = head + `<tbody>${body}</tbody>` + foot;
     t.querySelectorAll('th[data-k]').forEach((th) => th.onclick = () => {
@@ -425,7 +422,7 @@
       <ul>
         <li><b>Highest tier only.</b> A call or digital conversation consumes tokens only for the highest level of AI it reached. A bot that escalates to a Virtual Agent costs one Virtual Agent session; bot to Virtual Agent to AVA costs one AVA session. The lower-tier sessions still appear in the tables under "Escalated" but bill nothing.</li>
         ${['aggregate', 'mixed'].includes(lastUsage?.summary.mode) ? '<li><b>Fallback in use for some data:</b> per-conversation data was not available, so the highest-tier rule could not be applied and voice rounding is estimated at half an increment per call.</li>' : ''}
-        <li>The minute rounding applies to the voice-bot total for the selected filters, so the KPI and the rows can differ by a fraction of a token.</li>
+        <li><b>Rounding is in every figure.</b> Voice-bot time for the date range is rounded up to a whole minute once, and the extra seconds are shared across the voice bots in proportion to their billed time. Tiles, the chart, every breakdown row and drill-downs all use these shared-out values, so they always add up to the same total. A drill-down shows that bot's share of the bill rather than rounding it again on its own.</li>
         <li>Third-party bots reached through Bot Connector (for example Amazon Lex or Google Dialogflow) appear in analytics but are not charged Genesys bot tokens. Tick "Show non-metered bots" to list them.</li>
         <li>Days are bucketed in ${esc(cfg.timeZone)}. Rates come from server settings and can be changed in <code>.env</code>.</li>
       </ul>`;
