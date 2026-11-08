@@ -14,6 +14,8 @@
 //   3. Virtual Agent ....... sessions / 2
 //   4. Agentic VA .......... 1.2 tokens per session
 //   5. A conversation consumes tokens only for the highest tier it reached (AVA > VA > Bot)
+//   6. Token consumption is rounded up to a whole token (TOKEN_ROUNDING sets the level: per type by
+//      default). The extra is shared across rows by their tokens, like the voice minute rounding.
 
 const { CATEGORY } = require('./catalog');
 
@@ -352,16 +354,41 @@ function enrich(rawRows, catalog) {
   });
 }
 
+// Rule 6: consumption for the date range is rounded up to a whole token. The rounding level is
+//   type ...... Bot, Virtual Agent and AVA totals are each rounded up (default)
+//   product ... voice bot, digital bot, Virtual Agent and AVA are each rounded up
+//   total ..... only the all-types total is rounded up
+//   none ...... no token rounding
+// Each row's tokens are scaled so the rows in a group add up to the rounded group total, and
+// usedTokens keeps the value before this step.
+const ROUNDING_GROUP = {
+  type: (r) => r.category,
+  product: (r) => (r.category === CATEGORY.BOT ? (isVoiceRow(r) ? 'bot-voice' : 'bot-digital') : r.category),
+  total: () => 'all',
+};
+function allocateTokenRounding(rows, rates) {
+  const groupOf = ROUNDING_GROUP[rates.tokenRounding || 'type'];
+  const out = rows.map((r) => ({ ...r, usedTokens: r.tokens }));
+  if (!groupOf) return out;
+  const sums = new Map();
+  for (const r of out) if (r.metered && r.tokens > 0) sums.set(groupOf(r), (sums.get(groupOf(r)) || 0) + r.tokens);
+  return out.map((r) => {
+    const sum = sums.get(groupOf(r));
+    if (!(r.metered && r.tokens > 0 && sum)) return r;
+    return { ...r, tokens: r.tokens * (Math.ceil(sum - 1e-9) / sum) };
+  });
+}
+
 // raw rows -> rows with tokens. Rows that carry a conversationId get the per-conversation rules
 // (exact per-call rounding, highest tier only); rows without one are billed as daily totals.
 function computeRows(rawRows, catalog, rates) {
   const enriched = enrich(rawRows, catalog);
   const conv = enriched.filter((r) => r.conversationId);
   const daily = enriched.filter((r) => !r.conversationId);
-  return allocateVoiceRounding([
+  return allocateTokenRounding(allocateVoiceRounding([
     ...collapse(applyHighestTier(conv, rates)).map((r) => ({ ...r, mode: 'conversation' })),
     ...collapse(applyAggregateRules(daily, rates)).map((r) => ({ ...r, mode: 'aggregate', conversations: null })),
-  ], rates);
+  ], rates), rates);
 }
 
 function applyFilters(rows, f) {
@@ -376,7 +403,7 @@ function applyFilters(rows, f) {
     (f.includeUnmetered || r.metered));
 }
 
-const GROUP_FIELDS = ['conversations', 'sessions', 'turns', 'callMinutes', 'minutes', 'tokens', 'absorbedSessions', 'billableSessions', 'billableTurns'];
+const GROUP_FIELDS = ['conversations', 'sessions', 'turns', 'callMinutes', 'minutes', 'usedTokens', 'tokens', 'absorbedSessions', 'billableSessions', 'billableTurns'];
 function groupSum(rows, keyFn, extra = () => ({})) {
   const m = new Map();
   for (const r of rows) {
@@ -390,12 +417,12 @@ function groupSum(rows, keyFn, extra = () => ({})) {
 
 function summarize(rows, granularity, start, end, rates) {
   const cats = [CATEGORY.BOT, CATEGORY.VA, CATEGORY.AVA];
-  const totals = Object.fromEntries(cats.map((c) => [c, { sessions: 0, billableSessions: 0, turns: 0, callMinutes: 0, minutes: 0, tokens: 0, absorbedSessions: 0 }]));
+  const totals = Object.fromEntries(cats.map((c) => [c, { sessions: 0, billableSessions: 0, turns: 0, callMinutes: 0, minutes: 0, usedTokens: 0, tokens: 0, absorbedSessions: 0 }]));
   let voiceSeconds = 0; let voiceMinutes = 0; let voiceTokens = 0; let digitalTurns = 0; let digitalTokens = 0;
   for (const r of rows) {
     const t = totals[r.category];
     t.sessions += r.sessions; t.billableSessions += r.billableSessions; t.turns += r.turns;
-    t.callMinutes += r.callMinutes || 0; t.minutes += r.minutes; t.tokens += r.tokens; t.absorbedSessions += r.absorbedSessions;
+    t.callMinutes += r.callMinutes || 0; t.minutes += r.minutes; t.usedTokens += r.usedTokens ?? r.tokens; t.tokens += r.tokens; t.absorbedSessions += r.absorbedSessions;
     if (r.category === CATEGORY.BOT && r.metered) {
       if (isVoiceRow(r)) { voiceSeconds += r.billedSeconds; voiceMinutes += r.minutes; voiceTokens += r.tokens; } else { digitalTurns += r.billableTurns; digitalTokens += r.tokens; }
     }
@@ -403,6 +430,7 @@ function summarize(rows, granularity, start, end, rates) {
   // Every figure is a sum of row values, which already carry the rounding (allocateVoiceRounding),
   // so tiles, chart and breakdowns agree. Trim float noise so 4.999999 shows as 5.
   const tidy = (v) => Math.round(v * 1e9) / 1e9;
+  for (const c of cats) { totals[c].tokens = tidy(totals[c].tokens); totals[c].usedTokens = tidy(totals[c].usedTokens); }
   totals.bot.voiceSeconds = voiceSeconds;
   totals.bot.voiceMinutesRounded = tidy(voiceMinutes);
   totals.bot.voiceTokens = rates ? voiceTokens : null;
@@ -426,7 +454,8 @@ function summarize(rows, granularity, start, end, rates) {
     totals: {
       ...totals,
       all: {
-        tokens: cats.reduce((s, c) => s + totals[c].tokens, 0),
+        tokens: tidy(cats.reduce((s, c) => s + totals[c].tokens, 0)),
+        usedTokens: tidy(cats.reduce((s, c) => s + totals[c].usedTokens, 0)),
         sessions: cats.reduce((s, c) => s + totals[c].sessions, 0),
         absorbedSessions: cats.reduce((s, c) => s + totals[c].absorbedSessions, 0),
       },
@@ -483,5 +512,5 @@ async function getUsage({ client, catalog, config, start, end }) {
 
 module.exports = {
   getUsage, computeRows, fetchBotFlowSessions, allocateTurns, enrich, applyHighestTier, applyAggregateRules, collapse, billedCallSeconds, rowTokens,
-  allocateVoiceRounding, applyFilters, summarize, chunkIntervals, tzOffset, bucketOf, addDays, METERED_BOT_PRODUCTS,
+  allocateVoiceRounding, allocateTokenRounding, applyFilters, summarize, chunkIntervals, tzOffset, bucketOf, addDays, METERED_BOT_PRODUCTS,
 };

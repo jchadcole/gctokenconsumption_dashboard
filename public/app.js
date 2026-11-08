@@ -230,6 +230,8 @@
   };
 
   // ---------- KPIs ----------
+  // Tokens are rounded up to whole tokens; say how much was used before that, when it differs.
+  const roundedNote = (t) => (t.usedTokens !== undefined && Math.abs(t.tokens - t.usedTokens) > 1e-9 ? ` · ${fmt(t.usedTokens, 2)} before rounding up` : '');
   function renderKpis(s) {
     const total = s.totals.all.tokens || 0;
     const active = (id) => !state.categories.length || state.categories.includes(id);
@@ -241,7 +243,7 @@
     };
     $('#kpis').innerHTML = `
       <div class="kpi total"><div class="k-label">Estimated tokens, all types</div>
-        <div class="k-value">${fmtTok(total)}</div><div class="k-sub">${state.start} to ${state.end}${s.totals.all.absorbedSessions ? ` · ${fmt(s.totals.all.absorbedSessions)} lower-tier sessions not billed` : ''}</div>
+        <div class="k-value">${fmtTok(total)}</div><div class="k-sub">${state.start} to ${state.end}${roundedNote(s.totals.all)}${s.totals.all.absorbedSessions ? ` · ${fmt(s.totals.all.absorbedSessions)} lower-tier sessions not billed` : ''}</div>
         <div class="share" aria-hidden="true">${share}</div></div>
       ${CATS.map((c) => {
         const t = s.totals[c.id];
@@ -249,7 +251,7 @@
         return `<button class="kpi ${active(c.id) ? '' : 'dim'}" data-c="${c.id}" title="Show only ${c.label}" style="--c:${c.color}">
           <div class="k-label"><span class="sw"></span>${c.label}</div>
           <div class="k-value">${fmtTok(t.tokens)}</div>
-          <div class="k-sub">${fmt(pct, 0)}% of total · ${subs[c.id](t)}</div></button>`;
+          <div class="k-sub">${fmt(pct, 0)}% of total · ${subs[c.id](t)}${roundedNote(t)}</div></button>`;
       }).join('')}`;
   }
   $('#kpis').onclick = (e) => { const b = e.target.closest('button.kpi'); if (b) toggleCategory(b.dataset.c, true); };
@@ -411,6 +413,7 @@
   function renderMethod() {
     if (!cfg) return;
     const r = cfg.rates;
+    const roundLevel = { type: 'Each type\'s total for the date range (Bots, Virtual Agents, AVAs)', product: 'Each product\'s total for the date range (voice bots, digital bots, Virtual Agents, AVAs)', total: 'The total for the date range' }[r.tokenRounding];
     $('#method').innerHTML = `
       <p>Genesys Cloud does not publish an API that splits token usage by bot, so this page reads bot and flow usage per conversation from the analytics APIs and applies the rules below. Use the billing section above to compare with the official org total.</p>
       <div class="table-wrap"><table><thead><tr><th>Type</th><th>How it is identified</th><th>Rule</th></tr></thead><tbody>
@@ -422,6 +425,7 @@
       <ul>
         <li><b>Highest tier only.</b> A call or digital conversation consumes tokens only for the highest level of AI it reached. A bot that escalates to a Virtual Agent costs one Virtual Agent session; bot to Virtual Agent to AVA costs one AVA session. The lower-tier sessions still appear in the tables under "Escalated" but bill nothing.</li>
         ${['aggregate', 'mixed'].includes(lastUsage?.summary.mode) ? '<li><b>Fallback in use for some data:</b> per-conversation data was not available, so the highest-tier rule could not be applied and voice rounding is estimated at half an increment per call.</li>' : ''}
+        <li><b>Whole tokens.</b> ${roundLevel ? `${roundLevel} is rounded up to a whole token, and the extra is shared across its rows by their tokens, so rows, the chart and drill-downs add up to the whole-token tiles.` : 'Token rounding is turned off (TOKEN_ROUNDING=none).'}</li>
         <li><b>Rounding is in every figure.</b> Voice-bot time for the date range is rounded up to a whole minute once, and the extra seconds are shared across the voice bots in proportion to their billed time. Tiles, the chart, every breakdown row and drill-downs all use these shared-out values, so they always add up to the same total. A drill-down shows that bot's share of the bill rather than rounding it again on its own.</li>
         <li>Third-party bots reached through Bot Connector (for example Amazon Lex or Google Dialogflow) appear in analytics but are not charged Genesys bot tokens. Tick "Show non-metered bots" to list them.</li>
         <li>Days are bucketed in ${esc(cfg.timeZone)}. Rates come from server settings and can be changed in <code>.env</code>.</li>

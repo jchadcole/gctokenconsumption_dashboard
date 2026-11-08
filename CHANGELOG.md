@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Genesys Cloud credentials can come from 1Password. `.env.tpl` holds `op://` secret references and `npm run start:op` starts the app through `op run`, which resolves them. `.env` still works as before. The app stops with a clear message if it is started without `op run` while a credential holds an `op://` reference.
 - **Refresh** button that re-fetches the flow catalog, usage and billing from Genesys Cloud instead of using the server caches, plus a "Data as of" time in the header.
+- Token consumption is rounded up to a whole token for the date range, by default for each type (Bots, Virtual Agents, AVAs). The extra is shared across rows by their tokens, so the tiles show whole tokens and the chart, every breakdown tab and drill-downs add up to them. Each tile also shows the tokens before rounding up. `TOKEN_ROUNDING` sets the level: `type`, `product`, `total` or `none`. The CSV has a `usedTokens` column.
 
 ### Fixed
 

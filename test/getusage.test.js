@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const u = require('../src/usage');
 
-const rates = { voiceBotMinutesPerToken: 17, voiceBotIncrementSeconds: 15, digitalBotTurnsPerToken: 51, virtualAgentSessionsPerToken: 2, avaTokensPerSession: 1.2 };
+const rates = { voiceBotMinutesPerToken: 17, voiceBotIncrementSeconds: 15, digitalBotTurnsPerToken: 51, virtualAgentSessionsPerToken: 2, avaTokensPerSession: 1.2, tokenRounding: 'none' };
 const config = { timeZone: 'UTC', maxDaysPerQuery: 31, rates };
 const catalog = {
   flows: [

@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const u = require('../src/usage');
 const { classify } = require('../src/catalog');
 
-const rates = { voiceBotMinutesPerToken: 17, voiceBotIncrementSeconds: 15, digitalBotTurnsPerToken: 51, virtualAgentSessionsPerToken: 2, avaTokensPerSession: 1.2 };
+const rates = { voiceBotMinutesPerToken: 17, voiceBotIncrementSeconds: 15, digitalBotTurnsPerToken: 51, virtualAgentSessionsPerToken: 2, avaTokensPerSession: 1.2, tokenRounding: 'none' };
 const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
 
 const catalog = {
@@ -181,4 +181,35 @@ test('rows, chart and breakdowns carry the minute rounding and add up to the Bot
   // A drill-down shows the row's share, not a fresh rounding
   const drill = u.summarize(u.applyFilters(rows, { flowIds: ['vbot2'] }), 'day', '2026-11-03', '2026-11-04', rates);
   close(drill.totals.bot.tokens, s.byFlow.find((f) => f.flowId === 'vbot2').tokens);
+});
+
+test('rule 6: each type is rounded up to a whole token, shared across its rows', () => {
+  const cat = { flows: [...catalog.flows, { id: 'vbot2', name: 'Voice bot 2', category: 'bot', isBotFlow: true, flowType: 'bot', avas: [] }] };
+  const raw = [
+    row('a1', 'vbot', { durationMs: 90000 }), // 1.5 billed min
+    { ...row('b1', 'vbot2', { durationMs: 20000 }), day: '2026-11-04' }, // 0.5 billed min -> 2 min = 2/17
+    row('v1', 'va'), // 0.5
+    row('x1', 'ava'), // 1.2
+  ];
+  const r = { ...rates, tokenRounding: 'type' };
+  const rows = u.computeRows(raw, cat, r);
+  const s = u.summarize(rows, 'day', '2026-11-03', '2026-11-04', r);
+  assert.equal(s.totals.bot.tokens, 1);
+  assert.equal(s.totals.va.tokens, 1);
+  assert.equal(s.totals.ava.tokens, 2);
+  assert.equal(s.totals.all.tokens, 4);
+  close(s.totals.all.usedTokens, 2 / 17 + 0.5 + 1.2);
+  close(s.byFlow.find((f) => f.flowId === 'vbot').tokens, 0.75); // 3/4 of the bot time
+  for (const tab of ['byFlow', 'byDivision', 'byMediaType', 'byLanguage', 'byBotProduct', 'byCategoryMedia']) close(s[tab].reduce((a, x) => a + x.tokens, 0), 4);
+  close(s.series.reduce((a, b) => a + b.bot + b.va + b.ava, 0), 4);
+  const drill = u.summarize(u.applyFilters(rows, { flowIds: ['vbot2'] }), 'day', '2026-11-03', '2026-11-04', r);
+  close(drill.totals.bot.tokens, 0.25);
+
+  const total = u.summarize(u.computeRows(raw, cat, { ...rates, tokenRounding: 'total' }), 'day', '2026-11-03', '2026-11-04', rates).totals;
+  assert.equal(total.all.tokens, 2); // 1.82 -> 2
+  const prod = u.summarize(u.computeRows([...raw, row('d1', 'dbot', { mediaType: 'message', turns: 5 })], cat, { ...rates, tokenRounding: 'product' }), 'day', '2026-11-03', '2026-11-04', rates).totals;
+  assert.equal(prod.bot.tokens, 2); // voice 0.12 -> 1, digital 0.1 -> 1
+  // a whole number stays as it is
+  const exact = u.summarize(u.computeRows([row('v1', 'va'), row('v2', 'va')], catalog, r), 'day', '2026-11-03', '2026-11-03', r).totals;
+  assert.equal(exact.va.tokens, 1);
 });

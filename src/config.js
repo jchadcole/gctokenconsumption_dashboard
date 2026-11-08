@@ -42,6 +42,8 @@ const config = {
     virtualAgentSessionsPerToken: num('RATE_VIRTUAL_AGENT_SESSIONS_PER_TOKEN', 2),
     // 4. Agentic Virtual Agents: 1.2 tokens per session
     avaTokensPerSession: num('RATE_AVA_TOKENS_PER_SESSION', num('RATE_AVA_TOKENS_PER_INTERACTION', 1.2)),
+    // 6. Consumption is rounded up to a whole token: per type (default), product, total, or none
+    tokenRounding: process.env.TOKEN_ROUNDING || 'type',
   },
 };
 
