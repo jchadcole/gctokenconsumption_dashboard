@@ -7,7 +7,9 @@
 //
 // Token rules:
 //   1. Voice bot ........... each call billed in 15 s increments (rounded up); the total is rounded up
-//                            to a whole minute and divided by 17
+//                            to a whole minute and divided by 17. The extra seconds from that last
+//                            step are shared across voice rows by their billed seconds, so every
+//                            row, chart bar, breakdown and drill-down adds up to the Bots total.
 //   2. Digital bot ......... prompt/response turns / 51
 //   3. Virtual Agent ....... sessions / 2
 //   4. Agentic VA .......... 1.2 tokens per session
@@ -87,7 +89,7 @@ function billedCallSeconds(durationMs, rates) {
 }
 
 // Token value of one row's billable usage. Voice-bot tokens here are before the final
-// "round the total up to a whole minute" step, which summarize() applies to the total.
+// "round the total up to a whole minute" step, which allocateVoiceRounding() applies.
 function rowTokens(r, rates) {
   if (!r.metered) return 0;
   if (r.category === CATEGORY.AVA) return r.billableSessions * rates.avaTokensPerSession;            // rule 4
@@ -154,7 +156,27 @@ function collapse(rows) {
     }
     for (const f of SUM_FIELDS) g[f] += r[f] || 0;
   }
-  return [...m.values()].map((g) => ({ ...g, minutes: g.billedSeconds / 60 }));
+  return [...m.values()].map((g) => ({ ...g, callMinutes: g.billedSeconds / 60, minutes: g.billedSeconds / 60 }));
+}
+
+const isVoiceBotRow = (r) => r.metered && r.category === CATEGORY.BOT && isVoiceRow(r) && r.billedSeconds > 0;
+
+// Rule 1, last step: the voice-bot total for the date range is rounded up to a whole minute. The extra
+// seconds that adds are shared across the voice rows in proportion to their billed seconds, so each
+// row's billed minutes and tokens include its share and the rows always add up to the rounded total.
+// Filters and drill-downs then show a subset's share of the bill rather than rounding it again.
+//   callMinutes ... voice time after per-call 15 s rounding
+//   minutes ....... billed voice minutes (callMinutes plus its share of the whole-minute rounding)
+function allocateVoiceRounding(rows, rates) {
+  const voice = rows.filter(isVoiceBotRow);
+  const seconds = voice.reduce((s, r) => s + r.billedSeconds, 0);
+  if (!seconds) return rows;
+  const factor = (Math.ceil(seconds / 60 - 1e-9) * 60) / seconds;
+  return rows.map((r) => {
+    if (!isVoiceBotRow(r)) return r;
+    const minutes = (r.billedSeconds / 60) * factor;
+    return { ...r, minutes, tokens: minutes / rates.voiceBotMinutesPerToken };
+  });
 }
 
 const stat = (metrics, name, key) => {
@@ -330,17 +352,16 @@ function enrich(rawRows, catalog) {
   });
 }
 
-// raw rows -> rows with tokens. Uses the per-conversation rules when rows carry a conversationId.
 // raw rows -> rows with tokens. Rows that carry a conversationId get the per-conversation rules
 // (exact per-call rounding, highest tier only); rows without one are billed as daily totals.
 function computeRows(rawRows, catalog, rates) {
   const enriched = enrich(rawRows, catalog);
   const conv = enriched.filter((r) => r.conversationId);
   const daily = enriched.filter((r) => !r.conversationId);
-  return [
+  return allocateVoiceRounding([
     ...collapse(applyHighestTier(conv, rates)).map((r) => ({ ...r, mode: 'conversation' })),
     ...collapse(applyAggregateRules(daily, rates)).map((r) => ({ ...r, mode: 'aggregate', conversations: null })),
-  ];
+  ], rates);
 }
 
 function applyFilters(rows, f) {
@@ -355,7 +376,7 @@ function applyFilters(rows, f) {
     (f.includeUnmetered || r.metered));
 }
 
-const GROUP_FIELDS = ['conversations', 'sessions', 'turns', 'minutes', 'tokens', 'absorbedSessions', 'billableSessions', 'billableTurns'];
+const GROUP_FIELDS = ['conversations', 'sessions', 'turns', 'callMinutes', 'minutes', 'tokens', 'absorbedSessions', 'billableSessions', 'billableTurns'];
 function groupSum(rows, keyFn, extra = () => ({})) {
   const m = new Map();
   for (const r of rows) {
@@ -369,28 +390,24 @@ function groupSum(rows, keyFn, extra = () => ({})) {
 
 function summarize(rows, granularity, start, end, rates) {
   const cats = [CATEGORY.BOT, CATEGORY.VA, CATEGORY.AVA];
-  const totals = Object.fromEntries(cats.map((c) => [c, { sessions: 0, billableSessions: 0, turns: 0, minutes: 0, tokens: 0, absorbedSessions: 0 }]));
-  let voiceSeconds = 0; let digitalTurns = 0;
+  const totals = Object.fromEntries(cats.map((c) => [c, { sessions: 0, billableSessions: 0, turns: 0, callMinutes: 0, minutes: 0, tokens: 0, absorbedSessions: 0 }]));
+  let voiceSeconds = 0; let voiceMinutes = 0; let voiceTokens = 0; let digitalTurns = 0; let digitalTokens = 0;
   for (const r of rows) {
     const t = totals[r.category];
     t.sessions += r.sessions; t.billableSessions += r.billableSessions; t.turns += r.turns;
-    t.minutes += r.minutes; t.tokens += r.tokens; t.absorbedSessions += r.absorbedSessions;
+    t.callMinutes += r.callMinutes || 0; t.minutes += r.minutes; t.tokens += r.tokens; t.absorbedSessions += r.absorbedSessions;
     if (r.category === CATEGORY.BOT && r.metered) {
-      if (isVoiceRow(r)) voiceSeconds += r.billedSeconds; else digitalTurns += r.billableTurns;
+      if (isVoiceRow(r)) { voiceSeconds += r.billedSeconds; voiceMinutes += r.minutes; voiceTokens += r.tokens; } else { digitalTurns += r.billableTurns; digitalTokens += r.tokens; }
     }
   }
-  // Rule 1: total voice-bot time is rounded up to a whole minute before dividing by 17.
-  const voiceMinutesRounded = Math.ceil(voiceSeconds / 60 - 1e-9);
-  const voiceTokens = rates ? voiceMinutesRounded / rates.voiceBotMinutesPerToken : null;
-  const digitalTokens = rates ? digitalTurns / rates.digitalBotTurnsPerToken : null;
-  const rowBotTokens = totals.bot.tokens;
-  if (rates) totals.bot.tokens = voiceTokens + digitalTokens;
+  // Every figure is a sum of row values, which already carry the rounding (allocateVoiceRounding),
+  // so tiles, chart and breakdowns agree. Trim float noise so 4.999999 shows as 5.
+  const tidy = (v) => Math.round(v * 1e9) / 1e9;
   totals.bot.voiceSeconds = voiceSeconds;
-  totals.bot.voiceMinutesRounded = voiceMinutesRounded;
-  totals.bot.voiceTokens = voiceTokens;
+  totals.bot.voiceMinutesRounded = tidy(voiceMinutes);
+  totals.bot.voiceTokens = rates ? voiceTokens : null;
   totals.bot.digitalTurns = digitalTurns;
-  totals.bot.digitalTokens = digitalTokens;
-  totals.bot.roundingAdjustment = totals.bot.tokens - rowBotTokens;
+  totals.bot.digitalTokens = rates ? digitalTokens : null;
 
   // Continuous time axis so gaps show as zero.
   const buckets = [];
@@ -466,5 +483,5 @@ async function getUsage({ client, catalog, config, start, end }) {
 
 module.exports = {
   getUsage, computeRows, fetchBotFlowSessions, allocateTurns, enrich, applyHighestTier, applyAggregateRules, collapse, billedCallSeconds, rowTokens,
-  applyFilters, summarize, chunkIntervals, tzOffset, bucketOf, addDays, METERED_BOT_PRODUCTS,
+  allocateVoiceRounding, applyFilters, summarize, chunkIntervals, tzOffset, bucketOf, addDays, METERED_BOT_PRODUCTS,
 };

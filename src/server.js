@@ -106,7 +106,7 @@ app.get('/api/usage.csv', wrap(async (req, res) => {
   const q = parseQuery(req.query);
   const catalog = await getCatalog();
   const rows = usage.applyFilters(await getRows(q.start, q.end, catalog), q.filters);
-  const cols = ['day', 'category', 'flowName', 'flowId', 'flowType', 'divisionName', 'mediaType', 'language', 'botProduct', 'sessions', 'billableSessions', 'absorbedSessions', 'turns', 'billableTurns', 'durationMs', 'billedSeconds', 'minutes', 'tokens', 'metered', 'avaNames', 'mode'];
+  const cols = ['day', 'category', 'flowName', 'flowId', 'flowType', 'divisionName', 'mediaType', 'language', 'botProduct', 'sessions', 'billableSessions', 'absorbedSessions', 'turns', 'billableTurns', 'durationMs', 'billedSeconds', 'callMinutes', 'minutes', 'tokens', 'metered', 'avaNames', 'mode'];
   const esc = (v) => {
     const s = Array.isArray(v) ? v.join('; ') : v === null || v === undefined ? '' : typeof v === 'number' ? String(Math.round(v * 1000) / 1000) : String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
