@@ -176,6 +176,8 @@ details pre { max-height: 300px; overflow: auto; font-size: 12px; background: va
 .tooltip .t-head { font-weight: 600; margin-bottom: 4px; }
 .tooltip .t-row { display: flex; justify-content: space-between; gap: 14px; align-items: center; }
 .tooltip .t-row i { width: 8px; height: 8px; border-radius: 2px; background: var(--c); display: inline-block; margin-right: 6px; }
+.tooltip .t-sub { color: var(--text-secondary); font-size: 11px; margin: 0 0 4px 14px; }
+.chart circle.esc { fill: none; stroke-width: 1.5; }
 .tooltip .t-note { color: var(--text-muted); font-size: 11px; max-width: 220px; margin-top: 4px; }
 .tooltip .t-total { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; }
 

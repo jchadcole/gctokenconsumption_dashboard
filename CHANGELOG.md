@@ -13,6 +13,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- The tokens-over-time chart now reconciles with the Breakdown. Hovering a day shows, per type, its billed calls or sessions, billed minutes, billed turns and escalated sessions next to its tokens, so the days add up to the Breakdown row. A day whose sessions were all escalated to a higher tier (billing 0 for this type) shows a small ring on the baseline instead of nothing.
 - A dashboard tab opened before the server was updated kept drawing with the old code until a hard refresh. The page now reloads itself when the server reports a new version.
 - Days with usage could look empty in the tokens-over-time chart. Each bot's whole tokens go to its busiest days, so a quieter day (for example 17 short calls on Nov 5) could be allotted 0 tokens. Those days now get a faint dashed bar at the tokens they used, and the tooltip says the usage is billed in the whole-token total. Solid bars still add up to the tiles.
 - The tokens-over-time chart shows a separate bar for Bots, Virtual Agents and AVAs in every day, week or month, with each value above its bar when there is room. Its vertical axis switches to a log scale (0, 1, 10, 100, ...) when small and large values are far apart, so a 1-token bar stays visible next to hundreds; **Auto / Linear / Log** buttons override it, and the choice is kept in the link.
