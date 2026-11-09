@@ -6,9 +6,9 @@ A small Node.js web app that pulls Genesys Cloud usage through the Platform API 
 
 ## What it shows
 
-- **Totals** for the date range: estimated tokens overall and for each type, with sessions, interactions and voice minutes.
+- **Totals** for the date range: estimated tokens overall and for each type, each split into voice and digital (tokens plus billed minutes, turns or sessions).
 - **Tokens over time**, stacked by type, grouped by day, week or month.
-- **Breakdown tables** by bot / flow, division, type × media, language and bot product. Click a row to drill down.
+- **Breakdown tables** by bot / flow, type, division, language and bot product. Each row has a **Voice** group (calls, billed bot minutes, tokens) and a **Digital** group (conversations, billed bot turns, tokens), because any bot, Virtual Agent or AVA can be voice, digital or both. Minutes and turns only apply to bots, so they are blank for Virtual Agents and AVAs, which bill per session. Click a row to drill down.
 - **Billed tokens from your contract**: the official, org-level token charges and token wallet balance from the Genesys billing API. Use this to check the estimate against the invoice.
 - **CSV export** of the filtered daily rows.
 
