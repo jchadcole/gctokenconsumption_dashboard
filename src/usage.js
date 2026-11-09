@@ -404,15 +404,32 @@ function applyFilters(rows, f) {
 }
 
 const GROUP_FIELDS = ['conversations', 'sessions', 'turns', 'callMinutes', 'minutes', 'usedTokens', 'tokens', 'absorbedSessions', 'billableSessions', 'billableTurns'];
+// Each group also splits its usage by channel, because a bot, Virtual Agent or AVA can be voice,
+// digital or both:
+//   voiceConversations / digitalConversations ... calls / digital conversations (sessions when only
+//                                                 daily totals are available)
+//   voiceMinutes ...... billed voice-bot minutes        digitalTurns ... billed digital-bot turns
+//   voiceTokens / digitalTokens ... tokens per channel; they add up to tokens
+// botVoice / botDigital say whether bot usage of that channel is present, so turns and minutes
+// can be left blank where they do not apply (Virtual Agents and AVAs bill per session).
+const CHANNEL_FIELDS = ['voiceConversations', 'voiceMinutes', 'voiceTokens', 'digitalConversations', 'digitalTurns', 'digitalTokens'];
+const channelOf = (r) => (isVoiceRow(r) ? 'voice' : 'digital');
 function groupSum(rows, keyFn, extra = () => ({})) {
   const m = new Map();
   for (const r of rows) {
     const k = keyFn(r);
-    if (!m.has(k)) m.set(k, { key: k, ...Object.fromEntries(GROUP_FIELDS.map((f) => [f, 0])), ...extra(r) });
+    if (!m.has(k)) m.set(k, { key: k, ...Object.fromEntries([...GROUP_FIELDS, ...CHANNEL_FIELDS].map((f) => [f, 0])), channels: [], botVoice: false, botDigital: false, ...extra(r) });
     const g = m.get(k);
     for (const f of GROUP_FIELDS) g[f] += r[f] || 0;
+    const ch = channelOf(r);
+    if (!g.channels.includes(ch)) g.channels.push(ch);
+    g[`${ch}Conversations`] += r.conversations ?? r.sessions ?? 0;
+    g[`${ch}Tokens`] += r.tokens || 0;
+    if (r.category === CATEGORY.BOT) {
+      if (ch === 'voice') { g.voiceMinutes += r.minutes || 0; g.botVoice = true; } else { g.digitalTurns += r.billableTurns || 0; g.botDigital = true; }
+    }
   }
-  return [...m.values()].sort((a, b) => b.tokens - a.tokens);
+  return [...m.values()].map((g) => ({ ...g, channels: g.channels.sort().reverse() })).sort((a, b) => b.tokens - a.tokens);
 }
 
 function summarize(rows, granularity, start, end, rates) {
@@ -422,6 +439,9 @@ function summarize(rows, granularity, start, end, rates) {
   for (const r of rows) {
     const t = totals[r.category];
     t.sessions += r.sessions; t.billableSessions += r.billableSessions; t.turns += r.turns;
+    const ch = channelOf(r);
+    t[`${ch}Tokens`] = (t[`${ch}Tokens`] || 0) + r.tokens;
+    t[`${ch}BillableSessions`] = (t[`${ch}BillableSessions`] || 0) + r.billableSessions;
     t.callMinutes += r.callMinutes || 0; t.minutes += r.minutes; t.usedTokens += r.usedTokens ?? r.tokens; t.tokens += r.tokens; t.absorbedSessions += r.absorbedSessions;
     if (r.category === CATEGORY.BOT && r.metered) {
       if (isVoiceRow(r)) { voiceSeconds += r.billedSeconds; voiceMinutes += r.minutes; voiceTokens += r.tokens; } else { digitalTurns += r.billableTurns; digitalTokens += r.tokens; }
@@ -431,11 +451,12 @@ function summarize(rows, granularity, start, end, rates) {
   // so tiles, chart and breakdowns agree. Trim float noise so 4.999999 shows as 5.
   const tidy = (v) => Math.round(v * 1e9) / 1e9;
   for (const c of cats) { totals[c].tokens = tidy(totals[c].tokens); totals[c].usedTokens = tidy(totals[c].usedTokens); }
+  for (const c of cats) for (const ch of ['voice', 'digital']) { totals[c][`${ch}Tokens`] = tidy(totals[c][`${ch}Tokens`] || 0); totals[c][`${ch}BillableSessions`] = totals[c][`${ch}BillableSessions`] || 0; }
   totals.bot.voiceSeconds = voiceSeconds;
   totals.bot.voiceMinutesRounded = tidy(voiceMinutes);
-  totals.bot.voiceTokens = rates ? voiceTokens : null;
+  totals.bot.voiceTokens = rates ? tidy(voiceTokens) : null;
   totals.bot.digitalTurns = digitalTurns;
-  totals.bot.digitalTokens = rates ? digitalTokens : null;
+  totals.bot.digitalTokens = rates ? tidy(digitalTokens) : null;
 
   // Continuous time axis so gaps show as zero.
   const buckets = [];
@@ -462,8 +483,9 @@ function summarize(rows, granularity, start, end, rates) {
     },
     mode: modes.length === 1 ? modes[0] : modes.length ? 'mixed' : null,
     series,
+    byCategory: groupSum(rows, (r) => r.category, (r) => ({ category: r.category })),
     byFlow: groupSum(rows, (r) => r.flowId, (r) => ({
-      flowId: r.flowId, name: r.flowName, category: r.category, flowType: r.flowType, mediaType: r.mediaType, mode: r.mode,
+      flowId: r.flowId, name: r.flowName, category: r.category, flowType: r.flowType, mode: r.mode,
       divisionName: r.divisionName, avaNames: r.avaNames, metered: r.metered,
     })),
     byDivision: groupSum(rows, (r) => r.divisionId || '__none__', (r) => ({ name: r.divisionName || '(unknown)' })),

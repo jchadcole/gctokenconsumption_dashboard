@@ -237,9 +237,9 @@
     const active = (id) => !state.categories.length || state.categories.includes(id);
     const share = CATS.map((c) => total ? `<span style="width:${(s.totals[c.id].tokens / total) * 100}%;background:${c.color}" title="${c.label}"></span>` : '').join('');
     const subs = {
-      bot: (t) => `${fmtBilledMin(t.voiceMinutesRounded)} billed voice min${t.callMinutes ? ` (${fmtMin(t.callMinutes)} of calls after 15 s rounding)` : ''} · ${fmt(t.digitalTurns)} digital turns`,
-      va: (t) => `${fmt(t.billableSessions)} billed sessions${t.absorbedSessions ? ` · ${fmt(t.absorbedSessions)} escalated to AVA` : ''}`,
-      ava: (t) => `${fmt(t.billableSessions)} billed sessions`,
+      bot: (t) => `<span class="split"><span>Voice <b>${fmtTok(t.voiceTokens)}</b> · ${fmtBilledMin(t.voiceMinutesRounded)} billed min${t.callMinutes ? ` (${fmtMin(t.callMinutes)} of calls)` : ''}</span><span>Digital <b>${fmtTok(t.digitalTokens)}</b> · ${fmt(t.digitalTurns)} turns</span></span>`,
+      va: (t) => `<span class="split"><span>Voice <b>${fmtTok(t.voiceTokens)}</b> · ${fmt(t.voiceBillableSessions)} sessions</span><span>Digital <b>${fmtTok(t.digitalTokens)}</b> · ${fmt(t.digitalBillableSessions)} sessions</span></span>`,
+      ava: (t) => `<span class="split"><span>Voice <b>${fmtTok(t.voiceTokens)}</b> · ${fmt(t.voiceBillableSessions)} sessions</span><span>Digital <b>${fmtTok(t.digitalTokens)}</b> · ${fmt(t.digitalBillableSessions)} sessions</span></span>`,
     };
     $('#kpis').innerHTML = `
       <div class="kpi total"><div class="k-label">Estimated tokens, all types</div>
@@ -251,7 +251,7 @@
         return `<button class="kpi ${active(c.id) ? '' : 'dim'}" data-c="${c.id}" title="Show only ${c.label}" style="--c:${c.color}">
           <div class="k-label"><span class="sw"></span>${c.label}</div>
           <div class="k-value">${fmtTok(t.tokens)}</div>
-          <div class="k-sub">${fmt(pct, 0)}% of total · ${subs[c.id](t)}${roundedNote(t)}</div></button>`;
+          <div class="k-sub">${subs[c.id](t)}${fmt(pct, 0)}% of total${t.absorbedSessions && c.id === 'va' ? ` · ${fmt(t.absorbedSessions)} escalated to AVA` : ''}${roundedNote(t)}</div></button>`;
       }).join('')}`;
   }
   $('#kpis').onclick = (e) => { const b = e.target.closest('button.kpi'); if (b) toggleCategory(b.dataset.c, true); };
@@ -330,24 +330,40 @@
   let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => lastUsage && renderChart(lastUsage.summary.series), 120); });
 
   // ---------- table ----------
-  const NUM_COLS = [{ key: 'conversations', label: 'Conversations', num: true, title: 'Calls or digital conversations that reached this flow', blankIfAggregate: true }, { key: 'sessions', label: 'Bot sessions', num: true, title: 'Bot sessions reported by Genesys analytics (a call can have more than one)' }, { key: 'turns', label: 'Turns', num: true }, { key: 'minutes', label: 'Billed voice min', num: true, billedMin: true, title: 'Billed voice-bot minutes: each call rounded up to 15 s, plus this row\'s share of rounding the range total up to a whole minute. Rows add up to the Bots tile.' }, { key: 'absorbedSessions', label: 'Escalated', num: true, title: 'Sessions not billed because the same conversation reached a higher tier' }, { key: 'tokens', label: 'Tokens', num: true, tok: true }];
+  // Columns shared by every breakdown tab: a Voice group and a Digital group, so each bot, Virtual
+  // Agent and AVA shows how much of its usage and tokens came from calls and from digital channels.
+  // Minutes and turns only apply to bots (Virtual Agents and AVAs bill per session), so they are
+  // blank (–) on rows with no bot usage of that channel. A channel a row never used is blank too.
+  const NUM_COLS = [
+    { key: 'voiceConversations', label: 'Calls', num: true, group: 'voice', na: (r) => !r.channels?.includes('voice'), title: 'Calls that reached this row (sessions when only daily totals are available)' },
+    { key: 'voiceMinutes', label: 'Bot min', num: true, group: 'voice', billedMin: true, na: (r) => !r.botVoice, title: 'Billed voice-bot minutes: each call rounded up to 15 s, plus a share of rounding the total up to a whole minute. Virtual Agents and AVAs bill per session, so minutes do not apply to them.' },
+    { key: 'voiceTokens', label: 'Tokens', num: true, group: 'voice', tok: true, na: (r) => !r.channels?.includes('voice') },
+    { key: 'digitalConversations', label: 'Conversations', num: true, group: 'digital', na: (r) => !r.channels?.includes('digital'), title: 'Chat, messaging, email and other digital conversations that reached this row (sessions when only daily totals are available)' },
+    { key: 'digitalTurns', label: 'Bot turns', num: true, group: 'digital', na: (r) => !r.botDigital, title: 'Billed prompt/response turns of digital bots (51 per token). Virtual Agents and AVAs bill per session, so turns do not apply to them.' },
+    { key: 'digitalTokens', label: 'Tokens', num: true, group: 'digital', tok: true, na: (r) => !r.channels?.includes('digital') },
+    { key: 'absorbedSessions', label: 'Escalated', num: true, title: 'Sessions not billed because the same conversation reached a higher tier' },
+    { key: 'tokens', label: 'Total tokens', num: true, tok: true },
+  ];
+  const GROUPS = { voice: 'Voice', digital: 'Digital' };
+  const channelText = (r) => (r.channels?.length === 2 ? 'voice + digital' : r.channels?.[0] || '');
   const TABLES = {
     byFlow: {
       cols: [
-        { key: 'name', label: 'Bot / flow', render: (r) => `${esc(r.name)}<span class="sub">${esc([r.flowType, r.mediaType, r.divisionName].filter(Boolean).join(' · '))}${r.avaNames?.length ? ` · AVA: ${esc(r.avaNames.join(', '))}` : ''}${r.metered ? '' : ' · not token-metered'}</span>` },
+        { key: 'name', label: 'Bot / flow', render: (r) => `${esc(r.name)}<span class="sub">${esc([r.flowType, channelText(r), r.divisionName].filter(Boolean).join(' · '))}${r.avaNames?.length ? ` · AVA: ${esc(r.avaNames.join(', '))}` : ''}${r.metered ? '' : ' · not token-metered'}</span>` },
         { key: 'category', label: 'Type', render: (r) => catTag(r.category) },
         ...NUM_COLS,
       ],
       drill: (r) => { state.flowIds = [r.flowId]; },
     },
+    byCategory: { cols: [{ key: 'category', label: 'Type', render: (r) => catTag(r.category) }, ...NUM_COLS], drill: (r) => { state.categories = [r.category]; } },
     byDivision: { cols: [{ key: 'name', label: 'Division' }, ...NUM_COLS], drill: (r) => { state.divisionIds = [r.key]; } },
-    byCategoryMedia: { cols: [{ key: 'category', label: 'Type', render: (r) => catTag(r.category) }, { key: 'name', label: 'Media type' }, ...NUM_COLS], drill: (r) => { state.categories = [r.category]; state.mediaTypes = [r.name]; } },
     byLanguage: { cols: [{ key: 'name', label: 'Language' }, ...NUM_COLS], drill: (r) => { if (r.key !== '__none__') state.languages = [r.key]; } },
     byBotProduct: { cols: [{ key: 'name', label: 'Bot product' }, ...NUM_COLS], drill: (r) => { if (r.key !== '__none__') state.botProducts = [r.key]; } },
   };
   const catTag = (c) => `<span class="cat"><i style="--c:${CAT[c].color}"></i>${CAT[c].short}</span>`;
 
   function renderTable() {
+    if (!TABLES[state.tab]) state.tab = 'byFlow'; // e.g. an old link to the removed Type × media tab
     const def = TABLES[state.tab];
     const rows = (lastUsage?.summary[state.tab] || []).slice();
     const { key, dir } = state.sort;
@@ -358,17 +374,27 @@
     });
     const total = rows.reduce((s, r) => s + r.tokens, 0);
     const maxTok = Math.max(0, ...rows.map((r) => r.tokens));
-    const head = `<thead><tr>${def.cols.map((c) => `<th data-k="${c.key}" class="${c.num ? 'num' : ''}" ${c.title ? `title="${esc(c.title)}"` : ''} ${key === c.key ? `aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : ''}>${c.label}</th>`).join('')}<th>Share</th></tr></thead>`;
+    const sortAttr = (c) => (key === c.key ? `aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : '');
+    const th = (c, extra = '') => `<th data-k="${c.key}" class="${c.num ? 'num' : ''}${c.group && def.cols.find((x) => x.group === c.group) === c ? ' g-start' : ''}" ${c.title ? `title="${esc(c.title)}"` : ''} ${sortAttr(c)} ${extra}>${c.label}</th>`;
+    const groupRow = def.cols.map((c, i) => {
+      if (!c.group) return th(c, 'rowspan="2"');
+      if (def.cols[i - 1]?.group === c.group) return '';
+      return `<th colspan="${def.cols.filter((x) => x.group === c.group).length}" class="grp g-start">${GROUPS[c.group]}</th>`;
+    }).join('');
+    const head = `<thead><tr>${groupRow}<th rowspan="2">Share</th></tr><tr>${def.cols.filter((c) => c.group).map((c) => th(c)).join('')}</tr></thead>`;
     const agg = lastUsage?.summary.mode === 'aggregate';
-    const numText = (c, v, r) => (c.blankIfAggregate && (agg || r?.mode === 'aggregate') ? '–' : c.billedMin ? fmtBilledMin(v) : c.min ? fmtMin(v) : c.tok ? fmtTok(v) : fmt(v));
+    const numText = (c, v, r) => ((c.blankIfAggregate && (agg || r?.mode === 'aggregate')) || (r && c.na?.(r)) ? '–' : c.billedMin ? fmtBilledMin(v) : c.min ? fmtMin(v) : c.tok ? fmtTok(v) : fmt(v));
     const cell = (c, r) => (c.render ? c.render(r) : c.num ? numText(c, r[c.key], r) : esc(r[c.key]));
     const color = (r) => (r.category ? CAT[r.category].color : 'var(--accent)');
-    const body = rows.length ? rows.map((r, i) => `<tr class="click" data-i="${i}" tabindex="0">${def.cols.map((c) => `<td class="${c.num ? 'num' : ''}">${cell(c, r)}</td>`).join('')}
+    const tdClass = (c) => `${c.num ? 'num' : ''}${c.group && def.cols.find((x) => x.group === c.group) === c ? ' g-start' : ''}`;
+    const body = rows.length ? rows.map((r, i) => `<tr class="click" data-i="${i}" tabindex="0">${def.cols.map((c) => `<td class="${tdClass(c)}">${cell(c, r)}</td>`).join('')}
       <td><div class="bar" title="${fmt(total ? (r.tokens / total) * 100 : 0, 1)}%"><span style="width:${maxTok ? (r.tokens / maxTok) * 100 : 0}%;--c:${color(r)}"></span></div></td></tr>`).join('')
       : `<tr><td colspan="${def.cols.length + 1}" class="muted">No data for these filters.</td></tr>`;
-    const sums = Object.fromEntries(['conversations', 'sessions', 'turns', 'minutes', 'absorbedSessions'].map((k) => [k, rows.reduce((s, r) => s + (r[k] || 0), 0)]));
+    const sums = Object.fromEntries(def.cols.filter((c) => c.num).map((c) => [c.key, rows.reduce((s, r) => s + (r[c.key] || 0), 0)]));
     sums.tokens = total;
-    const totalRow = rows.length > 1 ? `<tr>${def.cols.map((c, i) => `<td class="${c.num ? 'num' : ''}">${i === 0 ? 'Total' : c.num ? numText(c, sums[c.key]) : ''}</td>`).join('')}<td></td></tr>` : '';
+    sums.botVoice = rows.some((r) => r.botVoice); sums.botDigital = rows.some((r) => r.botDigital);
+    sums.channels = [...new Set(rows.flatMap((r) => r.channels || []))];
+    const totalRow = rows.length > 1 ? `<tr>${def.cols.map((c, i) => `<td class="${tdClass(c)}">${i === 0 ? 'Total' : c.num ? numText(c, sums[c.key], sums) : ''}</td>`).join('')}<td></td></tr>` : '';
     const foot = totalRow ? `<tfoot>${totalRow}</tfoot>` : '';
     const t = $('#table');
     t.innerHTML = head + `<tbody>${body}</tbody>` + foot;

@@ -213,3 +213,25 @@ test('rule 6: each type is rounded up to a whole token, shared across its rows',
   const exact = u.summarize(u.computeRows([row('v1', 'va'), row('v2', 'va')], catalog, r), 'day', '2026-11-03', '2026-11-03', r).totals;
   assert.equal(exact.va.tokens, 1);
 });
+
+test('breakdown rows split usage and tokens into voice and digital', () => {
+  const cat = { flows: [...catalog.flows, { id: 'both', name: 'Omni VA', category: 'va', isBotFlow: true, flowType: 'digitalbot', avas: [] }] };
+  const rows = u.computeRows([
+    row('c1', 'vbot', { mediaType: 'CALL', durationMs: 50000 }),          // voice bot: 1 billed min
+    row('d1', 'dbot', { mediaType: 'message', turns: 102 }),             // digital bot: 2 tokens
+    row('v1', 'both', { mediaType: 'voice' }), row('v2', 'both', { mediaType: 'message' }), row('v3', 'both', { mediaType: 'message' }),
+  ], { flows: cat.flows.map((f) => (f.id === 'both' ? { ...f, flowType: null } : f)) }, rates);
+  const s = u.summarize(rows, 'day', '2026-11-03', '2026-11-03', rates);
+  const bot = s.byCategory.find((r) => r.category === 'bot');
+  close(bot.voiceTokens, 1 / 17); close(bot.digitalTokens, 2);
+  assert.equal(bot.voiceMinutes, 1); assert.equal(bot.digitalTurns, 102);
+  assert.ok(bot.botVoice && bot.botDigital);
+  const va = s.byFlow.find((r) => r.flowId === 'both');
+  assert.deepEqual(va.channels, ['voice', 'digital']);
+  assert.equal(va.voiceConversations, 1); assert.equal(va.digitalConversations, 2);
+  close(va.voiceTokens, 0.5); close(va.digitalTokens, 1);
+  assert.equal(va.digitalTurns, 0); assert.ok(!va.botDigital); // turns do not apply to Virtual Agents
+  for (const r of [...s.byFlow, ...s.byCategory, ...s.byDivision]) close(r.voiceTokens + r.digitalTokens, r.tokens);
+  close(s.totals.va.voiceTokens, 0.5); close(s.totals.va.digitalTokens, 1);
+  assert.equal(s.totals.va.digitalBillableSessions, 2);
+});
