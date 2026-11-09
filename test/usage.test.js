@@ -318,3 +318,10 @@ test('default rounding: each bot rounds up on its own, so 543 Virtual Agent sess
   assert.equal(s.totals.all.tokens, 276);
   assert.equal(s.series.reduce((a, b) => a + b.va, 0), 272);
 });
+
+test('a voice "bot" flow that serves messaging counts as digital', () => {
+  const t = total([row('m1', 'vbot', { mediaType: 'message', turns: 51 })]);
+  assert.equal(t.bot.voiceSeconds, 0);
+  assert.equal(t.bot.digitalTurns, 51);
+  close(t.bot.tokens, 1);
+});
