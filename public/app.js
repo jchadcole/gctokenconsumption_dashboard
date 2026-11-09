@@ -10,7 +10,8 @@
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmt = (n, d = 0) => (n === null || n === undefined || Number.isNaN(n) ? '–' : Number(n).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d }));
-  const fmtTok = (n) => fmt(n, Math.abs(n) < 10 ? 2 : Math.abs(n) < 100 ? 1 : 0);
+  // Tokens are whole numbers when TOKEN_ROUNDING is on; decimals only show when it is turned off.
+  const fmtTok = (n) => (Number.isInteger(Math.round(n * 1e9) / 1e9) ? fmt(n, 0) : fmt(n, Math.abs(n) < 10 ? 2 : Math.abs(n) < 100 ? 1 : 0));
   // Voice time as minutes:seconds, e.g. 4.25 -> "4:15", so it is never confused with whole billed minutes.
   const fmtMin = (m) => {
     if (m === null || m === undefined || Number.isNaN(m)) return '–';
@@ -231,7 +232,6 @@
 
   // ---------- KPIs ----------
   // Tokens are rounded up to whole tokens; say how much was used before that, when it differs.
-  const roundedNote = (t) => (t.usedTokens !== undefined && Math.abs(t.tokens - t.usedTokens) > 1e-9 ? ` · ${fmt(t.usedTokens, 2)} before rounding up` : '');
   function renderKpis(s) {
     const total = s.totals.all.tokens || 0;
     const active = (id) => !state.categories.length || state.categories.includes(id);
@@ -243,7 +243,7 @@
     };
     $('#kpis').innerHTML = `
       <div class="kpi total"><div class="k-label">Estimated tokens, all types</div>
-        <div class="k-value">${fmtTok(total)}</div><div class="k-sub">${state.start} to ${state.end}${roundedNote(s.totals.all)}${s.totals.all.absorbedSessions ? ` · ${fmt(s.totals.all.absorbedSessions)} lower-tier sessions not billed` : ''}</div>
+        <div class="k-value">${fmtTok(total)}</div><div class="k-sub">${state.start} to ${state.end}${s.totals.all.absorbedSessions ? ` · ${fmt(s.totals.all.absorbedSessions)} lower-tier sessions not billed` : ''}</div>
         <div class="share" aria-hidden="true">${share}</div></div>
       ${CATS.map((c) => {
         const t = s.totals[c.id];
@@ -251,7 +251,7 @@
         return `<button class="kpi ${active(c.id) ? '' : 'dim'}" data-c="${c.id}" title="Show only ${c.label}" style="--c:${c.color}">
           <div class="k-label"><span class="sw"></span>${c.label}</div>
           <div class="k-value">${fmtTok(t.tokens)}</div>
-          <div class="k-sub">${subs[c.id](t)}${fmt(pct, 0)}% of total${t.absorbedSessions && c.id === 'va' ? ` · ${fmt(t.absorbedSessions)} escalated to AVA` : ''}${roundedNote(t)}</div></button>`;
+          <div class="k-sub">${subs[c.id](t)}${fmt(pct, 0)}% of total${t.absorbedSessions && c.id === 'va' ? ` · ${fmt(t.absorbedSessions)} escalated to AVA` : ''}</div></button>`;
       }).join('')}`;
   }
   $('#kpis').onclick = (e) => { const b = e.target.closest('button.kpi'); if (b) toggleCategory(b.dataset.c, true); };
@@ -277,7 +277,9 @@
     const m = { t: 12, r: 8, b: 28, l: 52 };
     const iw = W - m.l - m.r; const ih = H - m.t - m.b;
     const totals = series.map((s) => visible.reduce((a, c) => a + s[c.id], 0));
-    const max = niceMax(Math.max(0, ...totals));
+    const peak = Math.max(0, ...totals);
+    // Whole tokens get whole-number gridlines: the top of the axis is a multiple of 4 (4 gridlines).
+    const max = totals.every((t) => Number.isInteger(Math.round(t * 1e9) / 1e9)) ? Math.max(4, Math.ceil(niceMax(peak) / 4) * 4) : niceMax(peak);
     const n = series.length || 1;
     const step = iw / n;
     const bw = Math.max(2, Math.min(48, step * 0.62));
@@ -348,24 +350,24 @@
   // The token rule a row is billed by, as shown in "How tokens are calculated".
   const ruleText = (r) => {
     const t = cfg?.rates; if (!t || r.metered === false) return '';
-    if (r.category === 'va') return `sessions ÷ ${t.virtualAgentSessionsPerToken}`;
-    if (r.category === 'ava') return `${t.avaTokensPerSession} per session`;
+    if (r.category === 'va') return `sessions ÷ ${t.virtualAgentSessionsPerToken}, rounded up`;
+    if (r.category === 'ava') return `${t.avaTokensPerSession} per session, rounded up`;
     const parts = [];
     if (r.botVoice || r.channels?.includes('voice')) parts.push(`min ÷ ${t.voiceBotMinutesPerToken}`);
     if (r.botDigital || r.channels?.includes('digital')) parts.push(`turns ÷ ${t.digitalBotTurnsPerToken}`);
-    return parts.join(' · ');
+    return parts.length ? `${parts.join(' · ')}, rounded up` : '';
   };
   const channelText = (r) => (r.channels?.length === 2 ? 'voice + digital' : r.channels?.[0] || '');
   const TABLES = {
     byFlow: {
       cols: [
         { key: 'name', label: 'Bot / flow', render: (r) => `${esc(r.name)}<span class="sub">${esc([r.flowType, channelText(r), r.divisionName].filter(Boolean).join(' · '))}${r.avaNames?.length ? ` · AVA: ${esc(r.avaNames.join(', '))}` : ''}${r.metered ? '' : ' · not token-metered'}</span>` },
-        { key: 'category', label: 'Type', render: (r) => `${catTag(r.category)}<span class="sub">${esc(ruleText(r))}</span>` },
+        { key: 'category', label: 'Type', render: (r) => `${catTag(r.category)}<span class="sub rule">${esc(ruleText(r))}</span>` },
         ...NUM_COLS,
       ],
       drill: (r) => { state.flowIds = [r.flowId]; },
     },
-    byCategory: { cols: [{ key: 'category', label: 'Type', render: (r) => `${catTag(r.category)}<span class="sub">${esc(ruleText(r))}</span>` }, ...NUM_COLS], drill: (r) => { state.categories = [r.category]; } },
+    byCategory: { cols: [{ key: 'category', label: 'Type', render: (r) => `${catTag(r.category)}<span class="sub rule">${esc(ruleText(r))}</span>` }, ...NUM_COLS], drill: (r) => { state.categories = [r.category]; } },
     byDivision: { cols: [{ key: 'name', label: 'Division' }, ...NUM_COLS], drill: (r) => { state.divisionIds = [r.key]; } },
     byLanguage: { cols: [{ key: 'name', label: 'Language' }, ...NUM_COLS], drill: (r) => { if (r.key !== '__none__') state.languages = [r.key]; } },
     byBotProduct: { cols: [{ key: 'name', label: 'Bot product' }, ...NUM_COLS], drill: (r) => { if (r.key !== '__none__') state.botProducts = [r.key]; } },
@@ -402,7 +404,7 @@
     const tokTitle = (c, r) => {
       if (!c.used || c.na?.(r) || r[c.used] === undefined) return '';
       const extra = r[c.key] - r[c.used];
-      return extra > 0.005 ? ` title="${fmt(r[c.used], 2)} by the token rules + ${fmt(extra, 2)} share of rounding up to whole tokens"` : '';
+      return Math.abs(extra) > 0.005 ? ` title="${fmt(r[c.used], 2)} by the token rules, ${fmt(r[c.key], 0)} after rounding up to whole tokens"` : '';
     };
     const body = rows.length ? rows.map((r, i) => `<tr class="click" data-i="${i}" tabindex="0">${def.cols.map((c) => `<td class="${tdClass(c)}"${tokTitle(c, r)}>${cell(c, r)}</td>`).join('')}
       <td><div class="bar" title="${fmt(total ? (r.tokens / total) * 100 : 0, 1)}%"><span style="width:${maxTok ? (r.tokens / maxTok) * 100 : 0}%;--c:${color(r)}"></span></div></td></tr>`).join('')
@@ -456,7 +458,7 @@
   function renderMethod() {
     if (!cfg) return;
     const r = cfg.rates;
-    const roundLevel = { type: 'Each type\'s total for the date range (Bots, Virtual Agents, AVAs)', product: 'Each product\'s total for the date range (voice bots, digital bots, Virtual Agents, AVAs)', total: 'The total for the date range' }[r.tokenRounding];
+    const roundLevel = { type: 'Each type\'s total for the date range (Bots, Virtual Agents, AVAs)', product: 'Each product\'s total for the date range (voice bots, digital bots, Virtual Agents, AVAs)', total: 'The total for the date range', flow: 'Each bot or flow\'s total for the date range' }[r.tokenRounding];
     $('#method').innerHTML = `
       <p>Genesys Cloud does not publish an API that splits token usage by bot, so this page reads bot and flow usage per conversation from the analytics APIs and applies the rules below. Use the billing section above to compare with the official org total.</p>
       <div class="table-wrap"><table><thead><tr><th>Type</th><th>How it is identified</th><th>Rule</th></tr></thead><tbody>
@@ -468,7 +470,7 @@
       <ul>
         <li><b>Highest tier only.</b> A call or digital conversation consumes tokens only for the highest level of AI it reached. A bot that escalates to a Virtual Agent costs one Virtual Agent session; bot to Virtual Agent to AVA costs one AVA session. The lower-tier sessions still appear in the tables under "Escalated" but bill nothing.</li>
         ${['aggregate', 'mixed'].includes(lastUsage?.summary.mode) ? '<li><b>Fallback in use for some data:</b> per-conversation data was not available, so the highest-tier rule could not be applied and voice rounding is estimated at half an increment per call.</li>' : ''}
-        <li><b>Whole tokens.</b> ${roundLevel ? `${roundLevel} is rounded up to a whole token, and the extra is shared across its rows by their tokens, so rows, the chart and drill-downs add up to the whole-token tiles. Hover a token cell in the breakdown to see its value by the rules and its share of the round-up.` : 'Token rounding is turned off (TOKEN_ROUNDING=none).'}</li>
+        <li><b>Whole tokens.</b> ${roundLevel ? `${roundLevel} is rounded up to a whole token${r.tokenRounding === 'flow' ? ' (for example 543 Virtual Agent sessions ÷ 2 = 271.5, billed as 272), and the tiles add those up' : ''}. Each rounded-up total is handed to its rows (days, channels, languages) in proportion to usage with the largest remainder method, so every figure on the page is a whole number and they all add up to the tiles. Hover a token cell to see its value by the rules.` : 'Token rounding is turned off (TOKEN_ROUNDING=none), so tokens show with decimals.'}</li>
         <li><b>Rounding is in every figure.</b> Voice-bot time for the date range is rounded up to a whole minute once, and the extra seconds are shared across the voice bots in proportion to their billed time. Tiles, the chart, every breakdown row and drill-downs all use these shared-out values, so they always add up to the same total. A drill-down shows that bot's share of the bill rather than rounding it again on its own.</li>
         <li>Third-party bots reached through Bot Connector (for example Amazon Lex or Google Dialogflow) appear in analytics but are not charged Genesys bot tokens. Tick "Show non-metered bots" to list them.</li>
         <li>Days are bucketed in ${esc(cfg.timeZone)}. Rates come from server settings and can be changed in <code>.env</code>.</li>
