@@ -125,6 +125,12 @@ main { padding: 16px 24px 40px; display: grid; grid-template-columns: minmax(0, 
 .chart .baseline { stroke: var(--text-muted); }
 .chart .hit { fill: transparent; cursor: crosshair; }
 .chart .col.hover rect.bseg { filter: brightness(1.1); }
+.chart .val { fill: var(--text-secondary); font-size: 10px; font-variant-numeric: tabular-nums; }
+.chart .axis-note { fill: var(--text-muted); font-size: 10px; }
+.chart .col.hover path.bseg { filter: brightness(1.1); }
+.chart-tools { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.seg-sm { height: 26px; }
+.seg-sm button { font-size: 12px; padding: 0 8px; }
 .chart .empty { fill: var(--text-muted); font-size: 13px; }
 
 .tabs { display: flex; gap: 2px; background: var(--surface-2); padding: 3px; border-radius: 8px; flex-wrap: wrap; }

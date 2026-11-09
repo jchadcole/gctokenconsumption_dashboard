@@ -63,9 +63,16 @@
     <section class="card">
       <div class="card-head">
         <h2>Estimated tokens over time</h2>
-        <div class="legend" id="legend"></div>
+        <div class="chart-tools">
+          <div class="legend" id="legend"></div>
+          <div class="seg seg-sm" id="scale" role="radiogroup" aria-label="Vertical axis scale">
+            <button data-v="auto" role="radio" title="Log scale when small and large values are far apart, otherwise linear">Auto</button>
+            <button data-v="linear" role="radio">Linear</button>
+            <button data-v="log" role="radio" title="Each gridline is 10 times the one below, so small values stay visible next to large ones">Log</button>
+          </div>
+        </div>
       </div>
-      <div id="chart" class="chart" role="img" aria-label="Stacked bar chart of estimated tokens by type over time"></div>
+      <div id="chart" class="chart" role="img" aria-label="Bar chart of estimated tokens by type over time"></div>
     </section>
 
     <section class="card">

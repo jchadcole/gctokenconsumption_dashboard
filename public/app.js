@@ -28,7 +28,7 @@
   const state = {
     preset: 'thisMonth', start: '', end: '', granularity: 'day', categories: [],
     divisionIds: [], flowIds: [], mediaTypes: [], languages: [], botProducts: [], includeUnmetered: false,
-    tab: 'byFlow', sort: { key: 'tokens', dir: 'desc' },
+    tab: 'byFlow', sort: { key: 'tokens', dir: 'desc' }, scale: 'auto',
   };
   let catalog = null; let cfg = null; let lastUsage = null; let options = {};
 
@@ -45,7 +45,7 @@
   // ---------- URL state ----------
   function readUrl() {
     const p = new URLSearchParams(location.search);
-    for (const k of ['preset', 'start', 'end', 'granularity', 'tab']) if (p.get(k)) state[k] = p.get(k);
+    for (const k of ['preset', 'start', 'end', 'granularity', 'tab', 'scale']) if (p.get(k)) state[k] = p.get(k);
     for (const k of ['categories', ...MS_KEYS]) if (p.get(k)) state[k] = p.get(k).split(',').filter(Boolean);
     state.includeUnmetered = p.get('includeUnmetered') === '1';
   }
@@ -56,6 +56,7 @@
     for (const k of ['categories', ...MS_KEYS]) if (state[k].length) p.set(k, state[k].join(','));
     if (state.includeUnmetered) p.set('includeUnmetered', '1');
     if (forUrl && state.tab !== 'byFlow') p.set('tab', state.tab);
+    if (forUrl && state.scale !== 'auto') p.set('scale', state.scale);
     return p.toString();
   }
 
@@ -269,43 +270,68 @@
     for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p;
     return 10 * p;
   }
+  // Grouped bars: each time bucket has one bar per type (Bot, Virtual Agent, AVA), so every type's
+  // value is visible on its own. The vertical axis is linear, or a log scale (0, 1, 10, 100, ...)
+  // when small and large values are far apart, so a 1-token bar still shows next to hundreds.
+  const logTicks = (max) => {
+    const out = [0];
+    for (let p = 1; p <= max; p *= 10) out.push(p);
+    // Few decades: add 2x and 5x gridlines so the axis is not bare.
+    if (out.length <= 3) for (const p of out.slice(1)) for (const k of [2, 5]) if (p * k <= max) out.push(p * k);
+    return out.sort((a, b) => a - b);
+  };
+  function chartScale(values) {
+    const nz = values.filter((v) => v > 0);
+    const peak = Math.max(0, ...nz);
+    const spread = nz.length ? peak / Math.min(...nz) : 1;
+    const log = state.scale === 'log' || (state.scale === 'auto' && spread >= 20);
+    if (log) {
+      const max = 10 ** Math.ceil(Math.log10(Math.max(peak, 1)) + 1e-9);
+      const f = (v) => Math.log10(1 + Math.max(0, v)) / Math.log10(1 + max);
+      return { log, max, f, ticks: logTicks(max) };
+    }
+    const whole = values.every((v) => Number.isInteger(Math.round(v * 1e9) / 1e9));
+    const max = whole ? Math.max(4, Math.ceil(niceMax(peak) / 4) * 4) : niceMax(peak);
+    return { log, max, f: (v) => v / max, ticks: [0, 0.25, 0.5, 0.75, 1].map((k) => k * max) };
+  }
   function renderChart(series) {
     const el = $('#chart');
     const visible = CATS.filter((c) => !state.categories.length || state.categories.includes(c.id));
     $('#legend').innerHTML = visible.map((c) => `<span><i style="--c:${c.color}"></i>${c.label}</span>`).join('');
+    document.querySelectorAll('#scale button').forEach((b) => { b.classList.toggle('on', b.dataset.v === state.scale); b.setAttribute('aria-checked', b.dataset.v === state.scale); });
     const W = Math.max(320, el.clientWidth || 800); const H = 300;
-    const m = { t: 12, r: 8, b: 28, l: 52 };
+    const m = { t: 18, r: 8, b: 28, l: 52 };
     const iw = W - m.l - m.r; const ih = H - m.t - m.b;
     const totals = series.map((s) => visible.reduce((a, c) => a + s[c.id], 0));
-    const peak = Math.max(0, ...totals);
-    // Whole tokens get whole-number gridlines: the top of the axis is a multiple of 4 (4 gridlines).
-    const max = totals.every((t) => Number.isInteger(Math.round(t * 1e9) / 1e9)) ? Math.max(4, Math.ceil(niceMax(peak) / 4) * 4) : niceMax(peak);
+    const sc = chartScale(series.flatMap((s) => visible.map((c) => s[c.id])));
     const n = series.length || 1;
     const step = iw / n;
-    const bw = Math.max(2, Math.min(48, step * 0.62));
-    const y = (v) => m.t + ih - (v / max) * ih;
-    const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * max);
+    const groupW = Math.max(3 * visible.length, Math.min(30 * visible.length, step * 0.8));
+    const gap = visible.length > 1 && groupW / visible.length > 8 ? 2 : 0;
+    const bw = Math.max(1, (groupW - gap * (visible.length - 1)) / visible.length);
+    const y = (v) => m.t + ih - sc.f(v) * ih;
     const labelEvery = Math.ceil(n / Math.max(1, Math.floor(iw / 64)));
+    const showValues = bw >= 18; // value labels above bars when there is room
     let svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">`;
-    svg += `<g class="grid">${ticks.slice(1).map((t) => `<line x1="${m.l}" x2="${W - m.r}" y1="${y(t)}" y2="${y(t)}"/>`).join('')}</g>`;
-    svg += `<g class="axis">${ticks.map((t) => `<text x="${m.l - 8}" y="${y(t) + 4}" text-anchor="end">${compact(t)}</text>`).join('')}</g>`;
+    svg += `<g class="grid">${sc.ticks.slice(1).map((t) => `<line x1="${m.l}" x2="${W - m.r}" y1="${y(t)}" y2="${y(t)}"/>`).join('')}</g>`;
+    svg += `<g class="axis">${sc.ticks.map((t) => `<text x="${m.l - 8}" y="${y(t) + 4}" text-anchor="end">${compact(t)}</text>`).join('')}</g>`;
+    if (sc.log) svg += `<text class="axis-note" x="${m.l}" y="10">Log scale</text>`;
     svg += '<g class="cols">';
     series.forEach((s, i) => {
-      const cx = m.l + step * i + step / 2; const x = cx - bw / 2;
-      let acc = 0; let segs = '';
-      const parts = visible.filter((c) => s[c.id] > 0);
-      parts.forEach((c, j) => {
-        const v = s[c.id]; const y0 = y(acc); const y1 = y(acc + v);
-        const top = j === parts.length - 1;
-        const h = Math.max(0, y0 - y1 - (j > 0 ? 2 : 0)); // 2px surface gap between stacked segments
-        const r = top ? Math.min(4, bw / 2, h) : 0;
-        const yy = y1;
-        segs += top && r > 0
-          ? `<path class="bseg" fill="${c.color}" d="M${x},${yy + h} V${yy + r} Q${x},${yy} ${x + r},${yy} H${x + bw - r} Q${x + bw},${yy} ${x + bw},${yy + r} V${yy + h} Z"/>`
-          : `<rect class="bseg" fill="${c.color}" x="${x}" y="${yy}" width="${bw}" height="${h}"/>`;
-        acc += v;
+      const x0 = m.l + step * i + (step - groupW) / 2;
+      let bars = '';
+      visible.forEach((c, j) => {
+        const v = s[c.id];
+        if (!(v > 0)) return;
+        const x = x0 + j * (bw + gap);
+        const h = Math.max(2, y(0) - y(v)); // a non-zero value is always at least 2px tall
+        const yy = y(0) - h;
+        const r = Math.min(3, bw / 2, h);
+        bars += `<path class="bseg" fill="${c.color}" d="M${x},${yy + h} V${yy + r} Q${x},${yy} ${x + r},${yy} H${x + bw - r} Q${x + bw},${yy} ${x + bw},${yy + r} V${yy + h} Z"/>`;
+        const exact = fmtTok(v); // exact value when it fits above the bar, else 1.3K style
+        if (showValues) bars += `<text class="val" x="${x + bw / 2}" y="${yy - 4}" text-anchor="middle">${exact.length * 6 <= bw + gap + 6 ? exact : compact(v)}</text>`;
       });
-      svg += `<g class="col" data-i="${i}">${segs}<rect class="hit" x="${m.l + step * i}" y="${m.t}" width="${step}" height="${ih}"/></g>`;
+      svg += `<g class="col" data-i="${i}">${bars}<rect class="hit" x="${m.l + step * i}" y="${m.t}" width="${step}" height="${ih}"/></g>`;
     });
     svg += '</g>';
     svg += `<line class="baseline" x1="${m.l}" x2="${W - m.r}" y1="${y(0)}" y2="${y(0)}"/>`;
@@ -313,13 +339,13 @@
     if (!totals.some((t) => t > 0)) svg += `<text class="empty" x="${W / 2}" y="${H / 2}" text-anchor="middle">No token-consuming activity for these filters</text>`;
     svg += '</svg>';
     el.innerHTML = svg;
-    el.setAttribute('aria-label', `Stacked bars of estimated tokens per ${state.granularity}, ${state.start} to ${state.end}. Peak ${fmtTok(Math.max(0, ...totals))} tokens.`);
+    el.setAttribute('aria-label', `Bars of estimated tokens per ${state.granularity} for ${visible.map((c) => c.label).join(', ')}, ${state.start} to ${state.end}${sc.log ? ', log scale' : ''}. Peak ${fmtTok(Math.max(0, ...totals))} tokens in one ${state.granularity}.`);
 
     el.querySelectorAll('.col').forEach((g) => {
       g.addEventListener('mousemove', (e) => {
         const s = series[+g.dataset.i];
         const tot = visible.reduce((a, c) => a + s[c.id], 0);
-        tip.innerHTML = `<div class="t-head">${esc(bucketLabel(s.bucket))}</div>${visible.slice().reverse().map((c) => `<div class="t-row"><span><i style="--c:${c.color}"></i>${c.short}</span><b>${fmtTok(s[c.id])}</b></div>`).join('')}<div class="t-row t-total"><span>Total</span><b>${fmtTok(tot)}</b></div>`;
+        tip.innerHTML = `<div class="t-head">${esc(bucketLabel(s.bucket))}</div>${visible.map((c) => `<div class="t-row"><span><i style="--c:${c.color}"></i>${c.short}</span><b>${fmtTok(s[c.id])}</b></div>`).join('')}<div class="t-row t-total"><span>Total</span><b>${fmtTok(tot)}</b></div>`;
         tip.hidden = false;
         const tw = tip.offsetWidth; const th = tip.offsetHeight;
         let lx = e.clientX + 14; if (lx + tw > innerWidth - 8) lx = e.clientX - tw - 14;
@@ -329,6 +355,12 @@
       g.addEventListener('mouseleave', () => { tip.hidden = true; g.classList.remove('hover'); });
     });
   }
+  $('#scale').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    state.scale = b.dataset.v;
+    history.replaceState(null, '', `?${queryString(true)}`);
+    if (lastUsage) renderChart(lastUsage.summary.series);
+  };
   let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => lastUsage && renderChart(lastUsage.summary.series), 120); });
 
   // ---------- table ----------
