@@ -15,6 +15,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- The Type pills (Bot, VA, AVA) could be missing when the page's HTML and script were from different versions (the Time zone control was not found and drawing the controls stopped). The pills are now drawn first and the Time zone control is optional. Virtual Agent is shortened to **VA** on the pills, chart and tables.
 - Days were bucketed in UTC by default, so evening calls in the US landed on the next day (two Nov 8 evening calls showed under "today" on Nov 9). `REPORT_TIMEZONE` now defaults to the machine's own time zone, and the header shows which time zone days are in.
 - Today can be picked in the From and To date filters. The From picker used to stop at the current To date (so after "Last month" it could not reach today), and both pickers now go up to today. Picking a From after To (or a To before From) moves the other end along. Presets roll forward on each refresh, so a tab left open overnight includes the new day, and "today" uses the local date instead of the UTC one.
 
