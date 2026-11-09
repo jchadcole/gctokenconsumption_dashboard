@@ -7,12 +7,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- **Today** and **Yesterday** range presets. Every preset, the date pickers' limit and the API's default range use today in the Time zone filter's zone, and no range can go past today.
+- **Time zone** filter. Days (tiles, chart, Breakdown, CSV and the range presets) are counted in the chosen zone. It defaults to the browser's own zone, is kept in the page URL, and the header shows "days in <zone>".
 - Genesys Cloud credentials can come from 1Password. `.env.tpl` holds `op://` secret references and `npm run start:op` starts the app through `op run`, which resolves them. `.env` still works as before. The app stops with a clear message if it is started without `op run` while a credential holds an `op://` reference.
 - **Refresh** button that re-fetches the flow catalog, usage and billing from Genesys Cloud instead of using the server caches, plus a "Data as of" time in the header.
 - Token consumption is rounded up to a whole token for the date range, by default for each type (Bots, Virtual Agents, AVAs). The extra is shared across rows by their tokens, so the tiles show whole tokens and the chart, every breakdown tab and drill-downs add up to them. Each tile also shows the tokens before rounding up. `TOKEN_ROUNDING` sets the level: `type`, `product`, `total` or `none`. The CSV has a `usedTokens` column.
 
 ### Fixed
 
+- Days were bucketed in UTC by default, so evening calls in the US landed on the next day (two Nov 8 evening calls showed under "today" on Nov 9). `REPORT_TIMEZONE` now defaults to the machine's own time zone, and the header shows which time zone days are in.
 - Today can be picked in the From and To date filters. The From picker used to stop at the current To date (so after "Last month" it could not reach today), and both pickers now go up to today. Picking a From after To (or a To before From) moves the other end along. Presets roll forward on each refresh, so a tab left open overnight includes the new day, and "today" uses the local date instead of the UTC one.
 
 - The tokens-over-time chart now reconciles with the Breakdown. Hovering a day shows, per type, its billed calls or sessions, billed minutes, billed turns and escalated sessions next to its tokens, so the days add up to the Breakdown row. A day whose sessions were all escalated to a higher tier (billing 0 for this type) shows a small ring on the baseline instead of nothing.

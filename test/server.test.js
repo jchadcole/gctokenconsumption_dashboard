@@ -20,3 +20,16 @@ test('refresh=1 re-fetches usage instead of serving the cache', async () => {
     server.close();
   }
 });
+
+test('the tz parameter picks the time zone days are bucketed in, and bad values fall back', async () => {
+  const server = app.listen(0);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const ok = await (await fetch(`${base}/api/usage?start=2026-11-01&end=2026-11-03&tz=America/Chicago`)).json();
+    assert.equal(ok.query.tz, 'America/Chicago');
+    const bad = await (await fetch(`${base}/api/usage?start=2026-11-01&end=2026-11-03&tz=Not/AZone`)).json();
+    assert.notEqual(bad.query.tz, 'Not/AZone');
+  } finally {
+    server.close();
+  }
+});

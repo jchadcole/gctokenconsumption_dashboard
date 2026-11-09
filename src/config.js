@@ -28,7 +28,9 @@ const config = {
   region: (process.env.GENESYS_REGION || 'mypurecloud.com').replace(/^https?:\/\//, '').replace(/^(api|login)\./, ''),
   mock: bool('GENESYS_MOCK'),
   port: num('PORT', 3000),
-  timeZone: process.env.REPORT_TIMEZONE || 'UTC',
+  // Days are bucketed in this time zone. Default: the machine's own time zone, so "today" on the
+  // dashboard is the same day as on the user's clock (UTC put evening calls in the US on the next day).
+  timeZone: process.env.REPORT_TIMEZONE || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
   maxDaysPerQuery: num('ANALYTICS_MAX_DAYS', 31),
   catalogCacheMs: num('CATALOG_CACHE_MINUTES', 15) * 60 * 1000,
   enableInternalOverview: bool('ENABLE_INTERNAL_SUBSCRIPTION_OVERVIEW'),
