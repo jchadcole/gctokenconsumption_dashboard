@@ -128,6 +128,8 @@ main { padding: 16px 24px 40px; display: grid; grid-template-columns: minmax(0, 
 .chart .val { fill: var(--text-secondary); font-size: 10px; font-variant-numeric: tabular-nums; }
 .chart .axis-note { fill: var(--text-muted); font-size: 10px; }
 .chart .col.hover path.bseg { filter: brightness(1.1); }
+.chart path.bseg { stroke-width: 0; }
+.chart path.bseg.used-only { fill-opacity: 0.28; stroke-width: 1; stroke-dasharray: 3 2; }
 .chart-tools { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .seg-sm { height: 26px; }
 .seg-sm button { font-size: 12px; padding: 0 8px; }
@@ -174,6 +176,7 @@ details pre { max-height: 300px; overflow: auto; font-size: 12px; background: va
 .tooltip .t-head { font-weight: 600; margin-bottom: 4px; }
 .tooltip .t-row { display: flex; justify-content: space-between; gap: 14px; align-items: center; }
 .tooltip .t-row i { width: 8px; height: 8px; border-radius: 2px; background: var(--c); display: inline-block; margin-right: 6px; }
+.tooltip .t-note { color: var(--text-muted); font-size: 11px; max-width: 220px; margin-top: 4px; }
 .tooltip .t-total { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; }
 
 .loading main { opacity: .55; transition: opacity .15s; }

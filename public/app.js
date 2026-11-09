@@ -302,8 +302,13 @@
     const W = Math.max(320, el.clientWidth || 800); const H = 300;
     const m = { t: 18, r: 8, b: 28, l: 52 };
     const iw = W - m.l - m.r; const ih = H - m.t - m.b;
-    const totals = series.map((s) => visible.reduce((a, c) => a + s[c.id], 0));
-    const sc = chartScale(series.flatMap((s) => visible.map((c) => s[c.id])));
+    // A day whose usage was rounded into the bot's busier days (0 whole tokens, but tokens used)
+    // still gets a faint bar at its used value, so no day with activity looks empty.
+    const used = (s, c) => s[`${c.id}Used`] ?? s[c.id];
+    const usedOnly = (s, c) => !(s[c.id] > 0) && used(s, c) > 0;
+    const shown = (s, c) => (usedOnly(s, c) ? used(s, c) : s[c.id]);
+    const totals = series.map((s) => visible.reduce((a, c) => a + shown(s, c), 0));
+    const sc = chartScale(series.flatMap((s) => visible.map((c) => shown(s, c))));
     const n = series.length || 1;
     const step = iw / n;
     const groupW = Math.max(3 * visible.length, Math.min(30 * visible.length, step * 0.8));
@@ -321,13 +326,14 @@
       const x0 = m.l + step * i + (step - groupW) / 2;
       let bars = '';
       visible.forEach((c, j) => {
-        const v = s[c.id];
+        const v = shown(s, c);
         if (!(v > 0)) return;
+        const faint = usedOnly(s, c);
         const x = x0 + j * (bw + gap);
-        const h = Math.max(2, y(0) - y(v)); // a non-zero value is always at least 2px tall
+        const h = Math.max(faint ? 4 : 2, y(0) - y(v)); // a non-zero value is always visible
         const yy = y(0) - h;
         const r = Math.min(3, bw / 2, h);
-        bars += `<path class="bseg" fill="${c.color}" d="M${x},${yy + h} V${yy + r} Q${x},${yy} ${x + r},${yy} H${x + bw - r} Q${x + bw},${yy} ${x + bw},${yy + r} V${yy + h} Z"/>`;
+        bars += `<path class="bseg${faint ? ' used-only' : ''}" fill="${c.color}" stroke="${c.color}" d="M${x},${yy + h} V${yy + r} Q${x},${yy} ${x + r},${yy} H${x + bw - r} Q${x + bw},${yy} ${x + bw},${yy + r} V${yy + h} Z"/>`;
         const exact = fmtTok(v); // exact value when it fits above the bar, else 1.3K style
         if (showValues) bars += `<text class="val" x="${x + bw / 2}" y="${yy - 4}" text-anchor="middle">${exact.length * 6 <= bw + gap + 6 ? exact : compact(v)}</text>`;
       });
@@ -345,7 +351,9 @@
       g.addEventListener('mousemove', (e) => {
         const s = series[+g.dataset.i];
         const tot = visible.reduce((a, c) => a + s[c.id], 0);
-        tip.innerHTML = `<div class="t-head">${esc(bucketLabel(s.bucket))}</div>${visible.map((c) => `<div class="t-row"><span><i style="--c:${c.color}"></i>${c.short}</span><b>${fmtTok(s[c.id])}</b></div>`).join('')}<div class="t-row t-total"><span>Total</span><b>${fmtTok(tot)}</b></div>`;
+        const usedNote = visible.some((c) => usedOnly(s, c))
+          ? '<div class="t-note">Faint bar: tokens used this day that are billed in the whole-token total on a busier day.</div>' : '';
+        tip.innerHTML = `<div class="t-head">${esc(bucketLabel(s.bucket))}</div>${visible.map((c) => `<div class="t-row"><span><i style="--c:${c.color}"></i>${c.short}</span><b>${fmtTok(s[c.id])}${usedOnly(s, c) ? ` <small>(${fmtTok(used(s, c))} used)</small>` : ''}</b></div>`).join('')}<div class="t-row t-total"><span>Total</span><b>${fmtTok(tot)}</b></div>${usedNote}`;
         tip.hidden = false;
         const tw = tip.offsetWidth; const th = tip.offsetHeight;
         let lx = e.clientX + 14; if (lx + tw > innerWidth - 8) lx = e.clientX - tw - 14;

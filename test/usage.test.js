@@ -325,3 +325,17 @@ test('a voice "bot" flow that serves messaging counts as digital', () => {
   assert.equal(t.bot.digitalTurns, 51);
   close(t.bot.tokens, 1);
 });
+
+test('a day allotted 0 whole tokens keeps its used tokens in the chart series', () => {
+  const cat = { flows: [{ id: 'vbot', name: 'JCC Voice Bot 2', category: 'bot', isBotFlow: true, flowType: 'bot', avas: [] }] };
+  const raw = [
+    ...Array.from({ length: 17 }, (_, i) => ({ ...row(`a${i}`, 'vbot', { durationMs: 800 }), day: '2026-11-05' })),
+    ...Array.from({ length: 60 }, (_, i) => ({ ...row(`b${i}`, 'vbot', { durationMs: 50000 }), day: '2026-11-08' })),
+  ];
+  const rows = u.computeRows(raw, cat, { ...rates, tokenRounding: 'flow' });
+  const s = u.summarize(rows, 'day', '2026-11-05', '2026-11-08', rates);
+  const nov5 = s.series.find((x) => x.bucket === '2026-11-05');
+  assert.equal(nov5.bot, 0);              // its whole token went to the busier day
+  assert.ok(nov5.botUsed > 0.25);         // but its usage is still there for the chart
+  assert.equal(s.series.reduce((a, x) => a + x.bot, 0), s.totals.bot.tokens);
+});
