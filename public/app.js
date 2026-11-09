@@ -211,7 +211,8 @@
     const el = $('#asOf');
     if (!iso) { el.textContent = ''; return; }
     const d = new Date(iso);
-    el.textContent = `Data as of ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
+    // The report time zone decides which day a call falls on, so show it next to the time.
+    el.textContent = `Data as of ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}${cfg?.timeZone ? ` · days in ${cfg.timeZone}` : ''}`;
     el.title = d.toLocaleString();
   }
 

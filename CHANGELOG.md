@@ -13,6 +13,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Days were bucketed in UTC by default, so evening calls in the US landed on the next day (two Nov 8 evening calls showed under "today" on Nov 9). `REPORT_TIMEZONE` now defaults to the machine's own time zone, and the header shows which time zone days are in.
 - Today can be picked in the From and To date filters. The From picker used to stop at the current To date (so after "Last month" it could not reach today), and both pickers now go up to today. Picking a From after To (or a To before From) moves the other end along. Presets roll forward on each refresh, so a tab left open overnight includes the new day, and "today" uses the local date instead of the UTC one.
 
 - The tokens-over-time chart now reconciles with the Breakdown. Hovering a day shows, per type, its billed calls or sessions, billed minutes, billed turns and escalated sessions next to its tokens, so the days add up to the Breakdown row. A day whose sessions were all escalated to a higher tier (billing 0 for this type) shows a small ring on the baseline instead of nothing.
