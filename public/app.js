@@ -337,7 +337,12 @@
       let bars = '';
       visible.forEach((c, j) => {
         const v = shown(s, c);
-        if (!(v > 0)) return;
+        if (!(v > 0)) {
+          // Sessions escalated to a higher tier bill nothing here; a small ring on the baseline shows
+          // the day still had activity for this type (hover for the counts).
+          if (s[`${c.id}Escalated`] > 0) bars += `<circle class="esc" cx="${x0 + j * (bw + gap) + bw / 2}" cy="${y(0) - 4}" r="3" stroke="${c.color}"/>`;
+          return;
+        }
         const faint = usedOnly(s, c);
         const x = x0 + j * (bw + gap);
         const h = Math.max(faint ? 4 : 2, y(0) - y(v)); // a non-zero value is always visible
@@ -363,7 +368,20 @@
         const tot = visible.reduce((a, c) => a + s[c.id], 0);
         const usedNote = visible.some((c) => usedOnly(s, c))
           ? '<div class="t-note">Faint bar: tokens used this day that are billed in the whole-token total on a busier day.</div>' : '';
-        tip.innerHTML = `<div class="t-head">${esc(bucketLabel(s.bucket))}</div>${visible.map((c) => `<div class="t-row"><span><i style="--c:${c.color}"></i>${c.short}</span><b>${fmtTok(s[c.id])}${usedOnly(s, c) ? ` <small>(${fmtTok(used(s, c))} used)</small>` : ''}</b></div>`).join('')}<div class="t-row t-total"><span>Total</span><b>${fmtTok(tot)}</b></div>${usedNote}`;
+        // Per type: tokens, then the same counts the Breakdown shows for this day.
+        const detail = (c) => {
+          const d = (k) => s[`${c.id}${k}`] || 0;
+          const parts = [];
+          if (c.id === 'bot') {
+            const voiceOnly = d('Minutes') > 0 && !(d('Turns') > 0);
+            if (d('Sessions') > 0) parts.push(`${fmt(d('Sessions'))} billed ${voiceOnly ? 'calls' : 'sessions'}`);
+            if (d('Minutes') > 0) parts.push(`${fmtBilledMin(d('Minutes'))} billed min`);
+            if (d('Turns') > 0) parts.push(`${fmt(d('Turns'))} billed turns`);
+          } else if (d('Sessions') > 0) parts.push(`${fmt(d('Sessions'))} billed sessions`);
+          if (d('Escalated') > 0) parts.push(`${fmt(d('Escalated'))} escalated (billed at a higher tier)`);
+          return parts.length ? `<div class="t-sub">${parts.join('<br>')}</div>` : '';
+        };
+        tip.innerHTML = `<div class="t-head">${esc(bucketLabel(s.bucket))}</div>${visible.map((c) => `<div class="t-row"><span><i style="--c:${c.color}"></i>${c.short}</span><b>${fmtTok(s[c.id])}${usedOnly(s, c) ? ` <small>(${fmtTok(used(s, c))} used)</small>` : ''}</b></div>${detail(c)}`).join('')}<div class="t-row t-total"><span>Total</span><b>${fmtTok(tot)}</b></div>${usedNote}`;
         tip.hidden = false;
         const tw = tip.offsetWidth; const th = tip.offsetHeight;
         let lx = e.clientX + 14; if (lx + tw > innerWidth - 8) lx = e.clientX - tw - 14;

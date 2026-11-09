@@ -547,15 +547,29 @@ function summarize(rows, granularity, start, end, rates) {
   // and the tokens used before the round-up (botUsed / vaUsed / avaUsed). A bot's whole tokens are
   // handed to its busiest days, so a quieter day can be allotted 0 tokens while still having usage;
   // the chart uses the *Used values to keep that day visible.
-  const series = buckets.map((b) => ({ bucket: b, bot: 0, va: 0, ava: 0, botUsed: 0, vaUsed: 0, avaUsed: 0 }));
+  // Each bucket also carries the per-type counts the Breakdown shows, so the chart tooltip adds up to it:
+  //   *Sessions ... billed sessions (calls / digital conversations)   *Escalated ... absorbedSessions
+  //   *Minutes .... billed voice-bot minutes                         *Turns ....... billed digital-bot turns
+  const DETAIL = ['Used', 'Sessions', 'Escalated', 'Minutes', 'Turns'];
+  const series = buckets.map((b) => {
+    const s = { bucket: b };
+    for (const c of cats) { s[c] = 0; for (const d of DETAIL) s[`${c}${d}`] = 0; }
+    return s;
+  });
   const idx = new Map(series.map((s, i) => [s.bucket, i]));
   for (const r of rows) {
     const i = idx.get(bucketOf(r.day, granularity));
     if (i === undefined) continue;
-    series[i][r.category] += r.tokens;
-    series[i][`${r.category}Used`] += r.usedTokens ?? r.tokens;
+    const s = series[i]; const c = r.category;
+    s[c] += r.tokens;
+    s[`${c}Used`] += r.usedTokens ?? r.tokens;
+    s[`${c}Sessions`] += r.billableSessions || 0;
+    s[`${c}Escalated`] += r.absorbedSessions || 0;
+    if (c === CATEGORY.BOT && r.metered) {
+      if (isVoiceRow(r)) s[`${c}Minutes`] += r.minutes || 0; else s[`${c}Turns`] += r.billableTurns || 0;
+    }
   }
-  for (const s of series) for (const c of cats) s[`${c}Used`] = tidy(s[`${c}Used`]);
+  for (const s of series) for (const c of cats) for (const d of ['Used', 'Minutes', 'Turns']) s[`${c}${d}`] = tidy(s[`${c}${d}`]);
   const modes = [...new Set(rows.filter((r) => r.metered).map((r) => r.mode).filter(Boolean))];
   return {
     totals: {

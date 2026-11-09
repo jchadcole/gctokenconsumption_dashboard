@@ -339,3 +339,27 @@ test('a day allotted 0 whole tokens keeps its used tokens in the chart series', 
   assert.ok(nov5.botUsed > 0.25);         // but its usage is still there for the chart
   assert.equal(s.series.reduce((a, x) => a + x.bot, 0), s.totals.bot.tokens);
 });
+
+test('chart buckets carry the Breakdown counts: billed calls, billed minutes and escalated sessions', () => {
+  const cat = { flows: [
+    { id: 'vbot', name: 'JCC Voice Bot 2', category: 'bot', isBotFlow: true, flowType: 'bot', avas: [] },
+    { id: 'va', name: 'JCC Virtual Agent', category: 'va', isBotFlow: true, flowType: 'bot', avas: [] },
+  ] };
+  const raw = [
+    ...Array.from({ length: 17 }, (_, i) => ({ ...row(`a${i}`, 'vbot', { durationMs: 800 }), day: '2026-11-05' })),
+    { ...row('e1', 'vbot', { durationMs: 10000 }), day: '2026-11-09' }, { ...row('e1', 'va'), day: '2026-11-09' },
+    { ...row('e2', 'vbot', { durationMs: 10000 }), day: '2026-11-09' }, { ...row('e2', 'va'), day: '2026-11-09' },
+  ];
+  const rows = u.applyFilters(u.computeRows(raw, cat, { ...rates, tokenRounding: 'flow' }), { categories: ['bot'] });
+  const s = u.summarize(rows, 'day', '2026-11-03', '2026-11-09', rates);
+  const d5 = s.series.find((x) => x.bucket === '2026-11-05');
+  const d9 = s.series.find((x) => x.bucket === '2026-11-09');
+  assert.equal(d5.bot, 1); assert.equal(d5.botSessions, 17); assert.equal(d5.botMinutes, 5);
+  assert.equal(d9.bot, 0); assert.equal(d9.botEscalated, 2);
+  const flow = s.byFlow[0];
+  const sum = (k) => s.series.reduce((a, x) => a + x[k], 0);
+  assert.equal(sum('bot'), flow.tokens);
+  assert.equal(sum('botSessions'), flow.billableSessions);
+  assert.equal(sum('botEscalated'), flow.absorbedSessions);
+  assert.equal(sum('botMinutes'), flow.minutes);
+});
