@@ -10,7 +10,8 @@
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmt = (n, d = 0) => (n === null || n === undefined || Number.isNaN(n) ? '–' : Number(n).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d }));
-  const fmtTok = (n) => fmt(n, Math.abs(n) < 10 ? 2 : Math.abs(n) < 100 ? 1 : 0);
+  // Tokens are whole numbers when TOKEN_ROUNDING is on; decimals only show when it is turned off.
+  const fmtTok = (n) => (Number.isInteger(Math.round(n * 1e9) / 1e9) ? fmt(n, 0) : fmt(n, Math.abs(n) < 10 ? 2 : Math.abs(n) < 100 ? 1 : 0));
   // Voice time as minutes:seconds, e.g. 4.25 -> "4:15", so it is never confused with whole billed minutes.
   const fmtMin = (m) => {
     if (m === null || m === undefined || Number.isNaN(m)) return '–';
@@ -27,7 +28,7 @@
   const state = {
     preset: 'thisMonth', start: '', end: '', granularity: 'day', categories: [],
     divisionIds: [], flowIds: [], mediaTypes: [], languages: [], botProducts: [], includeUnmetered: false,
-    tab: 'byFlow', sort: { key: 'tokens', dir: 'desc' },
+    tab: 'byFlow', sort: { key: 'tokens', dir: 'desc' }, scale: 'auto',
   };
   let catalog = null; let cfg = null; let lastUsage = null; let options = {};
 
@@ -44,7 +45,7 @@
   // ---------- URL state ----------
   function readUrl() {
     const p = new URLSearchParams(location.search);
-    for (const k of ['preset', 'start', 'end', 'granularity', 'tab']) if (p.get(k)) state[k] = p.get(k);
+    for (const k of ['preset', 'start', 'end', 'granularity', 'tab', 'scale']) if (p.get(k)) state[k] = p.get(k);
     for (const k of ['categories', ...MS_KEYS]) if (p.get(k)) state[k] = p.get(k).split(',').filter(Boolean);
     state.includeUnmetered = p.get('includeUnmetered') === '1';
   }
@@ -55,6 +56,7 @@
     for (const k of ['categories', ...MS_KEYS]) if (state[k].length) p.set(k, state[k].join(','));
     if (state.includeUnmetered) p.set('includeUnmetered', '1');
     if (forUrl && state.tab !== 'byFlow') p.set('tab', state.tab);
+    if (forUrl && state.scale !== 'auto') p.set('scale', state.scale);
     return p.toString();
   }
 
@@ -231,7 +233,6 @@
 
   // ---------- KPIs ----------
   // Tokens are rounded up to whole tokens; say how much was used before that, when it differs.
-  const roundedNote = (t) => (t.usedTokens !== undefined && Math.abs(t.tokens - t.usedTokens) > 1e-9 ? ` · ${fmt(t.usedTokens, 2)} before rounding up` : '');
   function renderKpis(s) {
     const total = s.totals.all.tokens || 0;
     const active = (id) => !state.categories.length || state.categories.includes(id);
@@ -243,7 +244,7 @@
     };
     $('#kpis').innerHTML = `
       <div class="kpi total"><div class="k-label">Estimated tokens, all types</div>
-        <div class="k-value">${fmtTok(total)}</div><div class="k-sub">${state.start} to ${state.end}${roundedNote(s.totals.all)}${s.totals.all.absorbedSessions ? ` · ${fmt(s.totals.all.absorbedSessions)} lower-tier sessions not billed` : ''}</div>
+        <div class="k-value">${fmtTok(total)}</div><div class="k-sub">${state.start} to ${state.end}${s.totals.all.absorbedSessions ? ` · ${fmt(s.totals.all.absorbedSessions)} lower-tier sessions not billed` : ''}</div>
         <div class="share" aria-hidden="true">${share}</div></div>
       ${CATS.map((c) => {
         const t = s.totals[c.id];
@@ -251,7 +252,7 @@
         return `<button class="kpi ${active(c.id) ? '' : 'dim'}" data-c="${c.id}" title="Show only ${c.label}" style="--c:${c.color}">
           <div class="k-label"><span class="sw"></span>${c.label}</div>
           <div class="k-value">${fmtTok(t.tokens)}</div>
-          <div class="k-sub">${subs[c.id](t)}${fmt(pct, 0)}% of total${t.absorbedSessions && c.id === 'va' ? ` · ${fmt(t.absorbedSessions)} escalated to AVA` : ''}${roundedNote(t)}</div></button>`;
+          <div class="k-sub">${subs[c.id](t)}${fmt(pct, 0)}% of total${t.absorbedSessions && c.id === 'va' ? ` · ${fmt(t.absorbedSessions)} escalated to AVA` : ''}</div></button>`;
       }).join('')}`;
   }
   $('#kpis').onclick = (e) => { const b = e.target.closest('button.kpi'); if (b) toggleCategory(b.dataset.c, true); };
@@ -269,41 +270,68 @@
     for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p;
     return 10 * p;
   }
+  // Grouped bars: each time bucket has one bar per type (Bot, Virtual Agent, AVA), so every type's
+  // value is visible on its own. The vertical axis is linear, or a log scale (0, 1, 10, 100, ...)
+  // when small and large values are far apart, so a 1-token bar still shows next to hundreds.
+  const logTicks = (max) => {
+    const out = [0];
+    for (let p = 1; p <= max; p *= 10) out.push(p);
+    // Few decades: add 2x and 5x gridlines so the axis is not bare.
+    if (out.length <= 3) for (const p of out.slice(1)) for (const k of [2, 5]) if (p * k <= max) out.push(p * k);
+    return out.sort((a, b) => a - b);
+  };
+  function chartScale(values) {
+    const nz = values.filter((v) => v > 0);
+    const peak = Math.max(0, ...nz);
+    const spread = nz.length ? peak / Math.min(...nz) : 1;
+    const log = state.scale === 'log' || (state.scale === 'auto' && spread >= 20);
+    if (log) {
+      const max = 10 ** Math.ceil(Math.log10(Math.max(peak, 1)) + 1e-9);
+      const f = (v) => Math.log10(1 + Math.max(0, v)) / Math.log10(1 + max);
+      return { log, max, f, ticks: logTicks(max) };
+    }
+    const whole = values.every((v) => Number.isInteger(Math.round(v * 1e9) / 1e9));
+    const max = whole ? Math.max(4, Math.ceil(niceMax(peak) / 4) * 4) : niceMax(peak);
+    return { log, max, f: (v) => v / max, ticks: [0, 0.25, 0.5, 0.75, 1].map((k) => k * max) };
+  }
   function renderChart(series) {
     const el = $('#chart');
     const visible = CATS.filter((c) => !state.categories.length || state.categories.includes(c.id));
     $('#legend').innerHTML = visible.map((c) => `<span><i style="--c:${c.color}"></i>${c.label}</span>`).join('');
+    document.querySelectorAll('#scale button').forEach((b) => { b.classList.toggle('on', b.dataset.v === state.scale); b.setAttribute('aria-checked', b.dataset.v === state.scale); });
     const W = Math.max(320, el.clientWidth || 800); const H = 300;
-    const m = { t: 12, r: 8, b: 28, l: 52 };
+    const m = { t: 18, r: 8, b: 28, l: 52 };
     const iw = W - m.l - m.r; const ih = H - m.t - m.b;
     const totals = series.map((s) => visible.reduce((a, c) => a + s[c.id], 0));
-    const max = niceMax(Math.max(0, ...totals));
+    const sc = chartScale(series.flatMap((s) => visible.map((c) => s[c.id])));
     const n = series.length || 1;
     const step = iw / n;
-    const bw = Math.max(2, Math.min(48, step * 0.62));
-    const y = (v) => m.t + ih - (v / max) * ih;
-    const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * max);
+    const groupW = Math.max(3 * visible.length, Math.min(30 * visible.length, step * 0.8));
+    const gap = visible.length > 1 && groupW / visible.length > 8 ? 2 : 0;
+    const bw = Math.max(1, (groupW - gap * (visible.length - 1)) / visible.length);
+    const y = (v) => m.t + ih - sc.f(v) * ih;
     const labelEvery = Math.ceil(n / Math.max(1, Math.floor(iw / 64)));
+    const showValues = bw >= 18; // value labels above bars when there is room
     let svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">`;
-    svg += `<g class="grid">${ticks.slice(1).map((t) => `<line x1="${m.l}" x2="${W - m.r}" y1="${y(t)}" y2="${y(t)}"/>`).join('')}</g>`;
-    svg += `<g class="axis">${ticks.map((t) => `<text x="${m.l - 8}" y="${y(t) + 4}" text-anchor="end">${compact(t)}</text>`).join('')}</g>`;
+    svg += `<g class="grid">${sc.ticks.slice(1).map((t) => `<line x1="${m.l}" x2="${W - m.r}" y1="${y(t)}" y2="${y(t)}"/>`).join('')}</g>`;
+    svg += `<g class="axis">${sc.ticks.map((t) => `<text x="${m.l - 8}" y="${y(t) + 4}" text-anchor="end">${compact(t)}</text>`).join('')}</g>`;
+    if (sc.log) svg += `<text class="axis-note" x="${m.l}" y="10">Log scale</text>`;
     svg += '<g class="cols">';
     series.forEach((s, i) => {
-      const cx = m.l + step * i + step / 2; const x = cx - bw / 2;
-      let acc = 0; let segs = '';
-      const parts = visible.filter((c) => s[c.id] > 0);
-      parts.forEach((c, j) => {
-        const v = s[c.id]; const y0 = y(acc); const y1 = y(acc + v);
-        const top = j === parts.length - 1;
-        const h = Math.max(0, y0 - y1 - (j > 0 ? 2 : 0)); // 2px surface gap between stacked segments
-        const r = top ? Math.min(4, bw / 2, h) : 0;
-        const yy = y1;
-        segs += top && r > 0
-          ? `<path class="bseg" fill="${c.color}" d="M${x},${yy + h} V${yy + r} Q${x},${yy} ${x + r},${yy} H${x + bw - r} Q${x + bw},${yy} ${x + bw},${yy + r} V${yy + h} Z"/>`
-          : `<rect class="bseg" fill="${c.color}" x="${x}" y="${yy}" width="${bw}" height="${h}"/>`;
-        acc += v;
+      const x0 = m.l + step * i + (step - groupW) / 2;
+      let bars = '';
+      visible.forEach((c, j) => {
+        const v = s[c.id];
+        if (!(v > 0)) return;
+        const x = x0 + j * (bw + gap);
+        const h = Math.max(2, y(0) - y(v)); // a non-zero value is always at least 2px tall
+        const yy = y(0) - h;
+        const r = Math.min(3, bw / 2, h);
+        bars += `<path class="bseg" fill="${c.color}" d="M${x},${yy + h} V${yy + r} Q${x},${yy} ${x + r},${yy} H${x + bw - r} Q${x + bw},${yy} ${x + bw},${yy + r} V${yy + h} Z"/>`;
+        const exact = fmtTok(v); // exact value when it fits above the bar, else 1.3K style
+        if (showValues) bars += `<text class="val" x="${x + bw / 2}" y="${yy - 4}" text-anchor="middle">${exact.length * 6 <= bw + gap + 6 ? exact : compact(v)}</text>`;
       });
-      svg += `<g class="col" data-i="${i}">${segs}<rect class="hit" x="${m.l + step * i}" y="${m.t}" width="${step}" height="${ih}"/></g>`;
+      svg += `<g class="col" data-i="${i}">${bars}<rect class="hit" x="${m.l + step * i}" y="${m.t}" width="${step}" height="${ih}"/></g>`;
     });
     svg += '</g>';
     svg += `<line class="baseline" x1="${m.l}" x2="${W - m.r}" y1="${y(0)}" y2="${y(0)}"/>`;
@@ -311,13 +339,13 @@
     if (!totals.some((t) => t > 0)) svg += `<text class="empty" x="${W / 2}" y="${H / 2}" text-anchor="middle">No token-consuming activity for these filters</text>`;
     svg += '</svg>';
     el.innerHTML = svg;
-    el.setAttribute('aria-label', `Stacked bars of estimated tokens per ${state.granularity}, ${state.start} to ${state.end}. Peak ${fmtTok(Math.max(0, ...totals))} tokens.`);
+    el.setAttribute('aria-label', `Bars of estimated tokens per ${state.granularity} for ${visible.map((c) => c.label).join(', ')}, ${state.start} to ${state.end}${sc.log ? ', log scale' : ''}. Peak ${fmtTok(Math.max(0, ...totals))} tokens in one ${state.granularity}.`);
 
     el.querySelectorAll('.col').forEach((g) => {
       g.addEventListener('mousemove', (e) => {
         const s = series[+g.dataset.i];
         const tot = visible.reduce((a, c) => a + s[c.id], 0);
-        tip.innerHTML = `<div class="t-head">${esc(bucketLabel(s.bucket))}</div>${visible.slice().reverse().map((c) => `<div class="t-row"><span><i style="--c:${c.color}"></i>${c.short}</span><b>${fmtTok(s[c.id])}</b></div>`).join('')}<div class="t-row t-total"><span>Total</span><b>${fmtTok(tot)}</b></div>`;
+        tip.innerHTML = `<div class="t-head">${esc(bucketLabel(s.bucket))}</div>${visible.map((c) => `<div class="t-row"><span><i style="--c:${c.color}"></i>${c.short}</span><b>${fmtTok(s[c.id])}</b></div>`).join('')}<div class="t-row t-total"><span>Total</span><b>${fmtTok(tot)}</b></div>`;
         tip.hidden = false;
         const tw = tip.offsetWidth; const th = tip.offsetHeight;
         let lx = e.clientX + 14; if (lx + tw > innerWidth - 8) lx = e.clientX - tw - 14;
@@ -327,6 +355,12 @@
       g.addEventListener('mouseleave', () => { tip.hidden = true; g.classList.remove('hover'); });
     });
   }
+  $('#scale').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    state.scale = b.dataset.v;
+    history.replaceState(null, '', `?${queryString(true)}`);
+    if (lastUsage) renderChart(lastUsage.summary.series);
+  };
   let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => lastUsage && renderChart(lastUsage.summary.series), 120); });
 
   // ---------- table ----------
@@ -335,27 +369,37 @@
   // Minutes and turns only apply to bots (Virtual Agents and AVAs bill per session), so they are
   // blank (–) on rows with no bot usage of that channel. A channel a row never used is blank too.
   const NUM_COLS = [
-    { key: 'voiceConversations', label: 'Calls', num: true, group: 'voice', na: (r) => !r.channels?.includes('voice'), title: 'Calls that reached this row (sessions when only daily totals are available)' },
+    { key: 'voiceSessions', label: 'Billed calls', num: true, group: 'voice', na: (r) => !r.channels?.includes('voice'), title: 'Calls billed at this row\'s tier. Calls that went on to a higher tier are under Escalated.' },
     { key: 'voiceMinutes', label: 'Bot min', num: true, group: 'voice', billedMin: true, na: (r) => !r.botVoice, title: 'Billed voice-bot minutes: each call rounded up to 15 s, plus a share of rounding the total up to a whole minute. Virtual Agents and AVAs bill per session, so minutes do not apply to them.' },
-    { key: 'voiceTokens', label: 'Tokens', num: true, group: 'voice', tok: true, na: (r) => !r.channels?.includes('voice') },
-    { key: 'digitalConversations', label: 'Conversations', num: true, group: 'digital', na: (r) => !r.channels?.includes('digital'), title: 'Chat, messaging, email and other digital conversations that reached this row (sessions when only daily totals are available)' },
+    { key: 'voiceTokens', label: 'Tokens', num: true, group: 'voice', tok: true, used: 'voiceUsedTokens', na: (r) => !r.channels?.includes('voice') },
+    { key: 'digitalSessions', label: 'Billed sessions', num: true, group: 'digital', na: (r) => !r.channels?.includes('digital'), title: 'Chat, messaging, email and other digital sessions billed at this row\'s tier. Sessions that went on to a higher tier are under Escalated.' },
     { key: 'digitalTurns', label: 'Bot turns', num: true, group: 'digital', na: (r) => !r.botDigital, title: 'Billed prompt/response turns of digital bots (51 per token). Virtual Agents and AVAs bill per session, so turns do not apply to them.' },
-    { key: 'digitalTokens', label: 'Tokens', num: true, group: 'digital', tok: true, na: (r) => !r.channels?.includes('digital') },
+    { key: 'digitalTokens', label: 'Tokens', num: true, group: 'digital', tok: true, used: 'digitalUsedTokens', na: (r) => !r.channels?.includes('digital') },
     { key: 'absorbedSessions', label: 'Escalated', num: true, title: 'Sessions not billed because the same conversation reached a higher tier' },
-    { key: 'tokens', label: 'Total tokens', num: true, tok: true },
+    { key: 'tokens', label: 'Total tokens', num: true, tok: true, used: 'usedTokens' },
   ];
   const GROUPS = { voice: 'Voice', digital: 'Digital' };
+  // The token rule a row is billed by, as shown in "How tokens are calculated".
+  const ruleText = (r) => {
+    const t = cfg?.rates; if (!t || r.metered === false) return '';
+    if (r.category === 'va') return `sessions ÷ ${t.virtualAgentSessionsPerToken}, rounded up`;
+    if (r.category === 'ava') return `${t.avaTokensPerSession} per session, rounded up`;
+    const parts = [];
+    if (r.botVoice || r.channels?.includes('voice')) parts.push(`min ÷ ${t.voiceBotMinutesPerToken}`);
+    if (r.botDigital || r.channels?.includes('digital')) parts.push(`turns ÷ ${t.digitalBotTurnsPerToken}`);
+    return parts.length ? `${parts.join(' · ')}, rounded up` : '';
+  };
   const channelText = (r) => (r.channels?.length === 2 ? 'voice + digital' : r.channels?.[0] || '');
   const TABLES = {
     byFlow: {
       cols: [
         { key: 'name', label: 'Bot / flow', render: (r) => `${esc(r.name)}<span class="sub">${esc([r.flowType, channelText(r), r.divisionName].filter(Boolean).join(' · '))}${r.avaNames?.length ? ` · AVA: ${esc(r.avaNames.join(', '))}` : ''}${r.metered ? '' : ' · not token-metered'}</span>` },
-        { key: 'category', label: 'Type', render: (r) => catTag(r.category) },
+        { key: 'category', label: 'Type', render: (r) => `${catTag(r.category)}<span class="sub rule">${esc(ruleText(r))}</span>` },
         ...NUM_COLS,
       ],
       drill: (r) => { state.flowIds = [r.flowId]; },
     },
-    byCategory: { cols: [{ key: 'category', label: 'Type', render: (r) => catTag(r.category) }, ...NUM_COLS], drill: (r) => { state.categories = [r.category]; } },
+    byCategory: { cols: [{ key: 'category', label: 'Type', render: (r) => `${catTag(r.category)}<span class="sub rule">${esc(ruleText(r))}</span>` }, ...NUM_COLS], drill: (r) => { state.categories = [r.category]; } },
     byDivision: { cols: [{ key: 'name', label: 'Division' }, ...NUM_COLS], drill: (r) => { state.divisionIds = [r.key]; } },
     byLanguage: { cols: [{ key: 'name', label: 'Language' }, ...NUM_COLS], drill: (r) => { if (r.key !== '__none__') state.languages = [r.key]; } },
     byBotProduct: { cols: [{ key: 'name', label: 'Bot product' }, ...NUM_COLS], drill: (r) => { if (r.key !== '__none__') state.botProducts = [r.key]; } },
@@ -387,7 +431,14 @@
     const cell = (c, r) => (c.render ? c.render(r) : c.num ? numText(c, r[c.key], r) : esc(r[c.key]));
     const color = (r) => (r.category ? CAT[r.category].color : 'var(--accent)');
     const tdClass = (c) => `${c.num ? 'num' : ''}${c.group && def.cols.find((x) => x.group === c.group) === c ? ' g-start' : ''}`;
-    const body = rows.length ? rows.map((r, i) => `<tr class="click" data-i="${i}" tabindex="0">${def.cols.map((c) => `<td class="${tdClass(c)}">${cell(c, r)}</td>`).join('')}
+    // Token cells explain themselves: the rule result for the row's billed units, plus its share of
+    // rounding its type's total up to a whole token (rule 6).
+    const tokTitle = (c, r) => {
+      if (!c.used || c.na?.(r) || r[c.used] === undefined) return '';
+      const extra = r[c.key] - r[c.used];
+      return Math.abs(extra) > 0.005 ? ` title="${fmt(r[c.used], 2)} by the token rules, ${fmt(r[c.key], 0)} after rounding up to whole tokens"` : '';
+    };
+    const body = rows.length ? rows.map((r, i) => `<tr class="click" data-i="${i}" tabindex="0">${def.cols.map((c) => `<td class="${tdClass(c)}"${tokTitle(c, r)}>${cell(c, r)}</td>`).join('')}
       <td><div class="bar" title="${fmt(total ? (r.tokens / total) * 100 : 0, 1)}%"><span style="width:${maxTok ? (r.tokens / maxTok) * 100 : 0}%;--c:${color(r)}"></span></div></td></tr>`).join('')
       : `<tr><td colspan="${def.cols.length + 1}" class="muted">No data for these filters.</td></tr>`;
     const sums = Object.fromEntries(def.cols.filter((c) => c.num).map((c) => [c.key, rows.reduce((s, r) => s + (r[c.key] || 0), 0)]));
@@ -439,7 +490,7 @@
   function renderMethod() {
     if (!cfg) return;
     const r = cfg.rates;
-    const roundLevel = { type: 'Each type\'s total for the date range (Bots, Virtual Agents, AVAs)', product: 'Each product\'s total for the date range (voice bots, digital bots, Virtual Agents, AVAs)', total: 'The total for the date range' }[r.tokenRounding];
+    const roundLevel = { type: 'Each type\'s total for the date range (Bots, Virtual Agents, AVAs)', product: 'Each product\'s total for the date range (voice bots, digital bots, Virtual Agents, AVAs)', total: 'The total for the date range', flow: 'Each bot or flow\'s total for the date range' }[r.tokenRounding];
     $('#method').innerHTML = `
       <p>Genesys Cloud does not publish an API that splits token usage by bot, so this page reads bot and flow usage per conversation from the analytics APIs and applies the rules below. Use the billing section above to compare with the official org total.</p>
       <div class="table-wrap"><table><thead><tr><th>Type</th><th>How it is identified</th><th>Rule</th></tr></thead><tbody>
@@ -451,7 +502,7 @@
       <ul>
         <li><b>Highest tier only.</b> A call or digital conversation consumes tokens only for the highest level of AI it reached. A bot that escalates to a Virtual Agent costs one Virtual Agent session; bot to Virtual Agent to AVA costs one AVA session. The lower-tier sessions still appear in the tables under "Escalated" but bill nothing.</li>
         ${['aggregate', 'mixed'].includes(lastUsage?.summary.mode) ? '<li><b>Fallback in use for some data:</b> per-conversation data was not available, so the highest-tier rule could not be applied and voice rounding is estimated at half an increment per call.</li>' : ''}
-        <li><b>Whole tokens.</b> ${roundLevel ? `${roundLevel} is rounded up to a whole token, and the extra is shared across its rows by their tokens, so rows, the chart and drill-downs add up to the whole-token tiles.` : 'Token rounding is turned off (TOKEN_ROUNDING=none).'}</li>
+        <li><b>Whole tokens.</b> ${roundLevel ? `${roundLevel} is rounded up to a whole token${r.tokenRounding === 'flow' ? ' (for example 543 Virtual Agent sessions ÷ 2 = 271.5, billed as 272), and the tiles add those up' : ''}. Each rounded-up total is handed to its rows (days, channels, languages) in proportion to usage with the largest remainder method, so every figure on the page is a whole number and they all add up to the tiles. Hover a token cell to see its value by the rules.` : 'Token rounding is turned off (TOKEN_ROUNDING=none), so tokens show with decimals.'}</li>
         <li><b>Rounding is in every figure.</b> Voice-bot time for the date range is rounded up to a whole minute once, and the extra seconds are shared across the voice bots in proportion to their billed time. Tiles, the chart, every breakdown row and drill-downs all use these shared-out values, so they always add up to the same total. A drill-down shows that bot's share of the bill rather than rounding it again on its own.</li>
         <li>Third-party bots reached through Bot Connector (for example Amazon Lex or Google Dialogflow) appear in analytics but are not charged Genesys bot tokens. Tick "Show non-metered bots" to list them.</li>
         <li>Days are bucketed in ${esc(cfg.timeZone)}. Rates come from server settings and can be changed in <code>.env</code>.</li>

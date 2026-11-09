@@ -199,11 +199,12 @@ test('rule 6: each type is rounded up to a whole token, shared across its rows',
   assert.equal(s.totals.ava.tokens, 2);
   assert.equal(s.totals.all.tokens, 4);
   close(s.totals.all.usedTokens, 2 / 17 + 0.5 + 1.2);
-  close(s.byFlow.find((f) => f.flowId === 'vbot').tokens, 0.75); // 3/4 of the bot time
+  assert.equal(s.byFlow.find((f) => f.flowId === 'vbot').tokens, 1); // the Bots token goes to the bot that used 3/4 of it
+  assert.equal(s.byFlow.find((f) => f.flowId === 'vbot2').tokens, 0);
   for (const tab of ['byFlow', 'byDivision', 'byMediaType', 'byLanguage', 'byBotProduct', 'byCategoryMedia']) close(s[tab].reduce((a, x) => a + x.tokens, 0), 4);
   close(s.series.reduce((a, b) => a + b.bot + b.va + b.ava, 0), 4);
   const drill = u.summarize(u.applyFilters(rows, { flowIds: ['vbot2'] }), 'day', '2026-11-03', '2026-11-04', r);
-  close(drill.totals.bot.tokens, 0.25);
+  assert.equal(drill.totals.bot.tokens, 0);
 
   const total = u.summarize(u.computeRows(raw, cat, { ...rates, tokenRounding: 'total' }), 'day', '2026-11-03', '2026-11-04', rates).totals;
   assert.equal(total.all.tokens, 2); // 1.82 -> 2
@@ -228,12 +229,94 @@ test('breakdown rows split usage and tokens into voice and digital', () => {
   assert.ok(bot.botVoice && bot.botDigital);
   const va = s.byFlow.find((r) => r.flowId === 'both');
   assert.deepEqual(va.channels, ['voice', 'digital']);
-  assert.equal(va.voiceConversations, 1); assert.equal(va.digitalConversations, 2);
+  assert.equal(va.voiceSessions, 1); assert.equal(va.digitalSessions, 2);
   close(va.voiceTokens, 0.5); close(va.digitalTokens, 1);
   assert.equal(va.digitalTurns, 0); assert.ok(!va.botDigital); // turns do not apply to Virtual Agents
   for (const r of [...s.byFlow, ...s.byCategory, ...s.byDivision]) close(r.voiceTokens + r.digitalTokens, r.tokens);
   close(s.totals.va.voiceTokens, 0.5); close(s.totals.va.digitalTokens, 1);
   assert.equal(s.totals.va.digitalBillableSessions, 2);
+});
+
+test('every breakdown row follows the token rules: billed units -> tokens, then the whole-token share', () => {
+  const r6 = { ...rates, tokenRounding: 'type' };
+  const cat = { flows: [...catalog.flows, { id: 'omni', name: 'Omni VA', category: 'va', isBotFlow: true, flowType: null, avas: [] }] };
+  const raw = [
+    ...Array.from({ length: 17 }, (_, i) => row(`c${i}`, 'vbot', { mediaType: 'CALL', durationMs: 800 })),
+    row('d1', 'dbot', { mediaType: 'message', turns: 40 }),
+    // bot -> VA in one call: the bot session is escalated, the VA bills one session
+    row('e1', 'vbot', { mediaType: 'CALL', durationMs: 30000 }), row('e1', 'va', { mediaType: 'CALL' }),
+    // VA -> AVA in one digital conversation: VA escalated, AVA bills 1.2
+    row('e2', 'omni', { mediaType: 'message' }), row('e2', 'ava', { mediaType: 'message' }),
+    row('o1', 'omni', { mediaType: 'voice' }), row('o2', 'omni', { mediaType: 'message' }), row('o3', 'omni', { mediaType: 'message' }),
+    row('a1', 'ava', { mediaType: 'voice' }),
+  ];
+  const s = u.summarize(u.computeRows(raw, cat, r6), 'day', '2026-11-03', '2026-11-03', r6);
+  const rule = (g, ch) => (g.category === 'va' ? g[`${ch}Sessions`] / 2 : g.category === 'ava' ? g[`${ch}Sessions`] * 1.2
+    : ch === 'voice' ? g.voiceMinutes / 17 : g.digitalTurns / 51);
+  for (const g of [...s.byFlow, ...s.byCategory]) {
+    for (const ch of ['voice', 'digital']) close(g[`${ch}UsedTokens`], rule(g, ch));
+    const t = s.totals[g.category];
+    for (const f of ['tokens', 'voiceTokens', 'digitalTokens']) assert.ok(Number.isInteger(g[f]), `${g.key} ${f} = ${g[f]}`);
+    assert.ok(Math.abs(g.tokens - g.usedTokens * (t.tokens / t.usedTokens)) < 1, `${g.key} is within one token of its share`);
+  }
+  // the Type tab matches the tiles channel by channel
+  for (const g of s.byCategory) {
+    const t = s.totals[g.category];
+    close(g.voiceTokens, t.voiceTokens); close(g.digitalTokens, t.digitalTokens); close(g.tokens, t.tokens);
+    if (g.category !== 'bot') { assert.equal(g.voiceSessions, t.voiceBillableSessions); assert.equal(g.digitalSessions, t.digitalBillableSessions); }
+  }
+  const va = s.byFlow.find((g) => g.flowId === 'omni');
+  assert.equal(va.digitalSessions, 2); // 3 digital conversations, 1 escalated to AVA
+  assert.equal(va.absorbedSessions, 1);
+  assert.equal(s.byCategory.find((g) => g.category === 'bot').voiceMinutes, 5); // 17 x 15 s, escalated call not billed
+  for (const tab of ['byFlow', 'byCategory', 'byDivision', 'byLanguage', 'byBotProduct']) {
+    close(s[tab].reduce((a, g) => a + g.tokens, 0), s.totals.all.tokens);
+    close(s[tab].reduce((a, g) => a + g.usedTokens, 0), s.totals.all.usedTokens);
+  }
+});
+
+test('rule 6: every figure is a whole number and adds up to the rounded totals', () => {
+  assert.deepEqual([...u.apportion([{ k: 'a', w: 0.5 }, { k: 'b', w: 0.3 }, { k: 'c', w: 0.2 }], 2, (x) => x.w, (x) => x.k)].map(([, n]) => n), [1, 1, 0]);
+  const r6 = { ...rates, tokenRounding: 'type' };
+  const cat = { flows: [...catalog.flows, { id: 'vbot2', name: 'Voice bot 2', category: 'bot', isBotFlow: true, flowType: 'bot', avas: [] }] };
+  const days = ['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05'];
+  const raw = days.flatMap((day, d) => [
+    ...Array.from({ length: 30 + d }, (_, i) => ({ ...row(`v${d}-${i}`, 'va', { mediaType: i % 3 ? 'voice' : 'message', language: i % 2 ? 'en-us' : 'es-us' }), day })),
+    ...Array.from({ length: 7 }, (_, i) => ({ ...row(`a${d}-${i}`, 'ava', { mediaType: i % 2 ? 'voice' : 'message' }), day })),
+    ...Array.from({ length: 40 }, (_, i) => ({ ...row(`b${d}-${i}`, i % 2 ? 'vbot' : 'vbot2', { mediaType: 'CALL', durationMs: 20000 + i * 1000 }), day })),
+    { ...row(`d${d}`, 'dbot', { mediaType: 'message', turns: 37 }), day },
+  ]);
+  const rows = u.computeRows(raw, cat, r6);
+  const s = u.summarize(rows, 'day', days[0], days.at(-1), r6);
+  for (const c of ['bot', 'va', 'ava']) assert.equal(s.totals[c].tokens, Math.ceil(s.totals[c].usedTokens - 1e-9));
+  for (const tab of ['byFlow', 'byCategory', 'byDivision', 'byLanguage', 'byBotProduct', 'byMediaType']) {
+    for (const g of s[tab]) for (const f of ['tokens', 'voiceTokens', 'digitalTokens']) assert.ok(Number.isInteger(g[f]), `${tab} ${g.key} ${f} = ${g[f]}`);
+    assert.equal(s[tab].reduce((a, g) => a + g.tokens, 0), s.totals.all.tokens);
+  }
+  for (const b of s.series) for (const c of ['bot', 'va', 'ava']) assert.ok(Number.isInteger(b[c]));
+  assert.equal(s.series.reduce((a, b) => a + b.bot + b.va + b.ava, 0), s.totals.all.tokens);
+  // a drill-down shows the same whole number as the row it came from
+  for (const g of s.byFlow) assert.equal(u.summarize(u.applyFilters(rows, { flowIds: [g.flowId] }), 'day', days[0], days.at(-1), r6).totals.all.tokens, g.tokens);
+  for (const g of s.byLanguage) assert.equal(u.summarize(u.applyFilters(rows, { languages: [g.key] }), 'day', days[0], days.at(-1), r6).totals.all.tokens, g.tokens);
+
+  // per bot / flow: every bot with usage rounds up on its own, and the tiles add those up
+  const rf = { ...rates, tokenRounding: 'flow' };
+  const f = u.summarize(u.computeRows(raw, cat, rf), 'day', days[0], days.at(-1), rf);
+  for (const g of f.byFlow) assert.equal(g.tokens, Math.ceil(g.usedTokens - 1e-9));
+  assert.equal(f.totals.all.tokens, f.byFlow.reduce((a, g) => a + g.tokens, 0));
+});
+
+test('default rounding: each bot rounds up on its own, so 543 Virtual Agent sessions bill 272', () => {
+  const r = { ...rates, tokenRounding: undefined };
+  const raw = [
+    ...Array.from({ length: 543 }, (_, i) => ({ ...row(`v${i}`, 'va'), day: i % 2 ? '2026-11-03' : '2026-11-04' })),
+    ...Array.from({ length: 3 }, (_, i) => row(`a${i}`, 'ava')),
+  ];
+  const s = u.summarize(u.computeRows(raw, catalog, r), 'day', '2026-11-03', '2026-11-04', r);
+  assert.equal(s.byFlow.find((g) => g.flowId === 'va').tokens, 272);
+  assert.equal(s.byFlow.find((g) => g.flowId === 'ava').tokens, 4); // 3.6 -> 4
+  assert.equal(s.totals.all.tokens, 276);
+  assert.equal(s.series.reduce((a, b) => a + b.va, 0), 272);
 });
 
 test('a voice "bot" flow that serves messaging counts as digital', () => {

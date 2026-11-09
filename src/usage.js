@@ -392,29 +392,67 @@ function enrich(rawRows, catalog) {
   });
 }
 
-// Rule 6: consumption for the date range is rounded up to a whole token. The rounding level is
-//   type ...... Bot, Virtual Agent and AVA totals are each rounded up (default)
+// Rule 6: token consumption is rounded up to whole tokens. The rounding level is
+//   flow ...... each bot / flow's total is rounded up on its own, and the tiles add those up (default)
+//   type ...... Bot, Virtual Agent and AVA totals are each rounded up
 //   product ... voice bot, digital bot, Virtual Agent and AVA are each rounded up
 //   total ..... only the all-types total is rounded up
-//   none ...... no token rounding
-// Each row's tokens are scaled so the rows in a group add up to the rounded group total, and
-// usedTokens keeps the value before this step.
+//   none ...... no token rounding (rows keep fractional tokens)
+// Every figure the dashboard shows is a whole number that adds up to the rounded totals. The whole
+// tokens of each group are handed out in two steps with the largest remainder method:
+//   1. group total (rounded up) -> each bot / flow, in proportion to the tokens it used
+//   2. each bot / flow's whole tokens -> its rows (day, channel, language, ...), the same way
+// So a bot's tokens never depend on which tab or filter is showing, every tab, chart bar and
+// drill-down is a whole number, and they all add up to the tiles. usedTokens keeps the value
+// before rounding (the rule applied to the row's billed units).
 const ROUNDING_GROUP = {
   type: (r) => r.category,
   product: (r) => (r.category === CATEGORY.BOT ? (isVoiceRow(r) ? 'bot-voice' : 'bot-digital') : r.category),
   total: () => 'all',
+  flow: (r) => r.flowId,
 };
-function allocateTokenRounding(rows, rates) {
-  const groupOf = ROUNDING_GROUP[rates.tokenRounding || 'type'];
-  const out = rows.map((r) => ({ ...r, usedTokens: r.tokens }));
-  if (!groupOf) return out;
-  const sums = new Map();
-  for (const r of out) if (r.metered && r.tokens > 0) sums.set(groupOf(r), (sums.get(groupOf(r)) || 0) + r.tokens);
-  return out.map((r) => {
-    const sum = sums.get(groupOf(r));
-    if (!(r.metered && r.tokens > 0 && sum)) return r;
-    return { ...r, tokens: r.tokens * (Math.ceil(sum - 1e-9) / sum) };
+
+// Split a whole number `total` over items in proportion to weight(item), as whole numbers that add
+// up to `total` (largest remainder; ties go to the larger weight, then to the key, so it is stable).
+function apportion(items, total, weight, key) {
+  const sum = items.reduce((s, it) => s + weight(it), 0);
+  if (!items.length) return new Map();
+  if (!(sum > 0)) return new Map(items.map((it, i) => [key(it), i === 0 ? total : 0]));
+  const shares = items.map((it) => {
+    const exact = (total * weight(it)) / sum;
+    const base = Math.floor(exact + 1e-9);
+    return { k: key(it), w: weight(it), base, frac: exact - base };
   });
+  let left = total - shares.reduce((s, x) => s + x.base, 0);
+  const order = [...shares].sort((a, b) => b.frac - a.frac || b.w - a.w || String(a.k).localeCompare(String(b.k)));
+  for (let i = 0; left > 0 && order.length; i = (i + 1) % order.length, left--) order[i].base += 1;
+  return new Map(shares.map((x) => [x.k, x.base]));
+}
+
+function allocateTokenRounding(rows, rates) {
+  const groupOf = ROUNDING_GROUP[rates.tokenRounding || 'flow'];
+  const out = rows.map((r, i) => ({ ...r, usedTokens: r.tokens, _i: i }));
+  if (!groupOf) return out.map(({ _i, ...r }) => r);
+  const billed = out.filter((r) => r.metered && r.tokens > 0);
+  const byGroup = new Map();
+  for (const r of billed) {
+    const g = groupOf(r);
+    if (!byGroup.has(g)) byGroup.set(g, new Map());
+    const flows = byGroup.get(g);
+    if (!flows.has(r.flowId)) flows.set(r.flowId, []);
+    flows.get(r.flowId).push(r);
+  }
+  const whole = new Map(); // row index -> whole tokens
+  for (const flows of byGroup.values()) {
+    const list = [...flows.entries()].map(([flowId, rs]) => ({ flowId, rs, used: rs.reduce((s, r) => s + r.tokens, 0) }));
+    const total = Math.ceil(list.reduce((s, f) => s + f.used, 0) - 1e-9);
+    const perFlow = apportion(list, total, (f) => f.used, (f) => f.flowId);
+    for (const f of list) {
+      const perRow = apportion(f.rs, perFlow.get(f.flowId), (r) => r.tokens, (r) => r._i);
+      for (const [i, n] of perRow) whole.set(i, n);
+    }
+  }
+  return out.map(({ _i, ...r }) => (whole.has(_i) ? { ...r, tokens: whole.get(_i) } : r));
 }
 
 // raw rows -> rows with tokens. Rows that carry a conversationId get the per-conversation rules
@@ -444,13 +482,15 @@ function applyFilters(rows, f) {
 const GROUP_FIELDS = ['conversations', 'sessions', 'turns', 'callMinutes', 'minutes', 'usedTokens', 'tokens', 'absorbedSessions', 'billableSessions', 'billableTurns'];
 // Each group also splits its usage by channel, because a bot, Virtual Agent or AVA can be voice,
 // digital or both:
-//   voiceConversations / digitalConversations ... calls / digital conversations (sessions when only
-//                                                 daily totals are available)
+//   voiceSessions / digitalSessions ... billed sessions: the calls / digital conversations billed at
+//                                       this row's tier (escalated ones are in absorbedSessions)
 //   voiceMinutes ...... billed voice-bot minutes        digitalTurns ... billed digital-bot turns
 //   voiceTokens / digitalTokens ... tokens per channel; they add up to tokens
+//   voiceUsedTokens / digitalUsedTokens ... the same before the whole-token round-up (rule 6), so
+//                                           each equals the rule applied to the row's billed units
 // botVoice / botDigital say whether bot usage of that channel is present, so turns and minutes
 // can be left blank where they do not apply (Virtual Agents and AVAs bill per session).
-const CHANNEL_FIELDS = ['voiceConversations', 'voiceMinutes', 'voiceTokens', 'digitalConversations', 'digitalTurns', 'digitalTokens'];
+const CHANNEL_FIELDS = ['voiceSessions', 'voiceMinutes', 'voiceTokens', 'voiceUsedTokens', 'digitalSessions', 'digitalTurns', 'digitalTokens', 'digitalUsedTokens'];
 const channelOf = (r) => (isVoiceRow(r) ? 'voice' : 'digital');
 function groupSum(rows, keyFn, extra = () => ({})) {
   const m = new Map();
@@ -461,8 +501,9 @@ function groupSum(rows, keyFn, extra = () => ({})) {
     for (const f of GROUP_FIELDS) g[f] += r[f] || 0;
     const ch = channelOf(r);
     if (!g.channels.includes(ch)) g.channels.push(ch);
-    g[`${ch}Conversations`] += r.conversations ?? r.sessions ?? 0;
+    g[`${ch}Sessions`] += r.billableSessions || 0;
     g[`${ch}Tokens`] += r.tokens || 0;
+    g[`${ch}UsedTokens`] += r.usedTokens ?? r.tokens ?? 0;
     if (r.category === CATEGORY.BOT) {
       if (ch === 'voice') { g.voiceMinutes += r.minutes || 0; g.botVoice = true; } else { g.digitalTurns += r.billableTurns || 0; g.botDigital = true; }
     }
@@ -594,5 +635,5 @@ async function getUsage({ client, catalog, config, start, end }) {
 
 module.exports = {
   getUsage, computeRows, fetchBotFlowSessions, allocateTurns, enrich, applyHighestTier, applyAggregateRules, collapse, billedCallSeconds, rowTokens,
-  allocateVoiceRounding, allocateTokenRounding, fetchBotSubTypes, hostsOfNestedAi, applyFilters, summarize, chunkIntervals, tzOffset, bucketOf, addDays, METERED_BOT_PRODUCTS,
+  allocateVoiceRounding, allocateTokenRounding, apportion, fetchBotSubTypes, hostsOfNestedAi, applyFilters, summarize, chunkIntervals, tzOffset, bucketOf, addDays, METERED_BOT_PRODUCTS,
 };

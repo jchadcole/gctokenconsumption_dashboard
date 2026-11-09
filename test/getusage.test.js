@@ -135,7 +135,7 @@ test('a Virtual Agent nested inside a voice bot is found and bills the calls as 
   assert.equal(s.totals.bot.absorbedSessions, 2);
   const va = s.byFlow.find((f) => f.flowId === 'va');
   assert.equal(va.name, 'VA flow');
-  assert.equal(va.voiceConversations, 2);
+  assert.equal(va.voiceSessions, 2); // billed calls (renamed from voiceConversations)
 });
 
 test('nested Virtual Agent tokens round up to a whole token per type', async () => {
