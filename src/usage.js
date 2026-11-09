@@ -406,13 +406,15 @@ function applyFilters(rows, f) {
 const GROUP_FIELDS = ['conversations', 'sessions', 'turns', 'callMinutes', 'minutes', 'usedTokens', 'tokens', 'absorbedSessions', 'billableSessions', 'billableTurns'];
 // Each group also splits its usage by channel, because a bot, Virtual Agent or AVA can be voice,
 // digital or both:
-//   voiceConversations / digitalConversations ... calls / digital conversations (sessions when only
-//                                                 daily totals are available)
+//   voiceSessions / digitalSessions ... billed sessions: the calls / digital conversations billed at
+//                                       this row's tier (escalated ones are in absorbedSessions)
 //   voiceMinutes ...... billed voice-bot minutes        digitalTurns ... billed digital-bot turns
 //   voiceTokens / digitalTokens ... tokens per channel; they add up to tokens
+//   voiceUsedTokens / digitalUsedTokens ... the same before the whole-token round-up (rule 6), so
+//                                           each equals the rule applied to the row's billed units
 // botVoice / botDigital say whether bot usage of that channel is present, so turns and minutes
 // can be left blank where they do not apply (Virtual Agents and AVAs bill per session).
-const CHANNEL_FIELDS = ['voiceConversations', 'voiceMinutes', 'voiceTokens', 'digitalConversations', 'digitalTurns', 'digitalTokens'];
+const CHANNEL_FIELDS = ['voiceSessions', 'voiceMinutes', 'voiceTokens', 'voiceUsedTokens', 'digitalSessions', 'digitalTurns', 'digitalTokens', 'digitalUsedTokens'];
 const channelOf = (r) => (isVoiceRow(r) ? 'voice' : 'digital');
 function groupSum(rows, keyFn, extra = () => ({})) {
   const m = new Map();
@@ -423,8 +425,9 @@ function groupSum(rows, keyFn, extra = () => ({})) {
     for (const f of GROUP_FIELDS) g[f] += r[f] || 0;
     const ch = channelOf(r);
     if (!g.channels.includes(ch)) g.channels.push(ch);
-    g[`${ch}Conversations`] += r.conversations ?? r.sessions ?? 0;
+    g[`${ch}Sessions`] += r.billableSessions || 0;
     g[`${ch}Tokens`] += r.tokens || 0;
+    g[`${ch}UsedTokens`] += r.usedTokens ?? r.tokens ?? 0;
     if (r.category === CATEGORY.BOT) {
       if (ch === 'voice') { g.voiceMinutes += r.minutes || 0; g.botVoice = true; } else { g.digitalTurns += r.billableTurns || 0; g.botDigital = true; }
     }

@@ -228,10 +228,47 @@ test('breakdown rows split usage and tokens into voice and digital', () => {
   assert.ok(bot.botVoice && bot.botDigital);
   const va = s.byFlow.find((r) => r.flowId === 'both');
   assert.deepEqual(va.channels, ['voice', 'digital']);
-  assert.equal(va.voiceConversations, 1); assert.equal(va.digitalConversations, 2);
+  assert.equal(va.voiceSessions, 1); assert.equal(va.digitalSessions, 2);
   close(va.voiceTokens, 0.5); close(va.digitalTokens, 1);
   assert.equal(va.digitalTurns, 0); assert.ok(!va.botDigital); // turns do not apply to Virtual Agents
   for (const r of [...s.byFlow, ...s.byCategory, ...s.byDivision]) close(r.voiceTokens + r.digitalTokens, r.tokens);
   close(s.totals.va.voiceTokens, 0.5); close(s.totals.va.digitalTokens, 1);
   assert.equal(s.totals.va.digitalBillableSessions, 2);
+});
+
+test('every breakdown row follows the token rules: billed units -> tokens, then the whole-token share', () => {
+  const r6 = { ...rates, tokenRounding: 'type' };
+  const cat = { flows: [...catalog.flows, { id: 'omni', name: 'Omni VA', category: 'va', isBotFlow: true, flowType: null, avas: [] }] };
+  const raw = [
+    ...Array.from({ length: 17 }, (_, i) => row(`c${i}`, 'vbot', { mediaType: 'CALL', durationMs: 800 })),
+    row('d1', 'dbot', { mediaType: 'message', turns: 40 }),
+    // bot -> VA in one call: the bot session is escalated, the VA bills one session
+    row('e1', 'vbot', { mediaType: 'CALL', durationMs: 30000 }), row('e1', 'va', { mediaType: 'CALL' }),
+    // VA -> AVA in one digital conversation: VA escalated, AVA bills 1.2
+    row('e2', 'omni', { mediaType: 'message' }), row('e2', 'ava', { mediaType: 'message' }),
+    row('o1', 'omni', { mediaType: 'voice' }), row('o2', 'omni', { mediaType: 'message' }), row('o3', 'omni', { mediaType: 'message' }),
+    row('a1', 'ava', { mediaType: 'voice' }),
+  ];
+  const s = u.summarize(u.computeRows(raw, cat, r6), 'day', '2026-11-03', '2026-11-03', r6);
+  const rule = (g, ch) => (g.category === 'va' ? g[`${ch}Sessions`] / 2 : g.category === 'ava' ? g[`${ch}Sessions`] * 1.2
+    : ch === 'voice' ? g.voiceMinutes / 17 : g.digitalTurns / 51);
+  for (const g of [...s.byFlow, ...s.byCategory]) {
+    for (const ch of ['voice', 'digital']) close(g[`${ch}UsedTokens`], rule(g, ch));
+    const t = s.totals[g.category];
+    close(g.tokens, g.usedTokens * (t.tokens / t.usedTokens)); // share of the type's whole-token round-up
+  }
+  // the Type tab matches the tiles channel by channel
+  for (const g of s.byCategory) {
+    const t = s.totals[g.category];
+    close(g.voiceTokens, t.voiceTokens); close(g.digitalTokens, t.digitalTokens); close(g.tokens, t.tokens);
+    if (g.category !== 'bot') { assert.equal(g.voiceSessions, t.voiceBillableSessions); assert.equal(g.digitalSessions, t.digitalBillableSessions); }
+  }
+  const va = s.byFlow.find((g) => g.flowId === 'omni');
+  assert.equal(va.digitalSessions, 2); // 3 digital conversations, 1 escalated to AVA
+  assert.equal(va.absorbedSessions, 1);
+  assert.equal(s.byCategory.find((g) => g.category === 'bot').voiceMinutes, 5); // 17 x 15 s, escalated call not billed
+  for (const tab of ['byFlow', 'byCategory', 'byDivision', 'byLanguage', 'byBotProduct']) {
+    close(s[tab].reduce((a, g) => a + g.tokens, 0), s.totals.all.tokens);
+    close(s[tab].reduce((a, g) => a + g.usedTokens, 0), s.totals.all.usedTokens);
+  }
 });

@@ -335,27 +335,37 @@
   // Minutes and turns only apply to bots (Virtual Agents and AVAs bill per session), so they are
   // blank (–) on rows with no bot usage of that channel. A channel a row never used is blank too.
   const NUM_COLS = [
-    { key: 'voiceConversations', label: 'Calls', num: true, group: 'voice', na: (r) => !r.channels?.includes('voice'), title: 'Calls that reached this row (sessions when only daily totals are available)' },
+    { key: 'voiceSessions', label: 'Billed calls', num: true, group: 'voice', na: (r) => !r.channels?.includes('voice'), title: 'Calls billed at this row\'s tier. Calls that went on to a higher tier are under Escalated.' },
     { key: 'voiceMinutes', label: 'Bot min', num: true, group: 'voice', billedMin: true, na: (r) => !r.botVoice, title: 'Billed voice-bot minutes: each call rounded up to 15 s, plus a share of rounding the total up to a whole minute. Virtual Agents and AVAs bill per session, so minutes do not apply to them.' },
-    { key: 'voiceTokens', label: 'Tokens', num: true, group: 'voice', tok: true, na: (r) => !r.channels?.includes('voice') },
-    { key: 'digitalConversations', label: 'Conversations', num: true, group: 'digital', na: (r) => !r.channels?.includes('digital'), title: 'Chat, messaging, email and other digital conversations that reached this row (sessions when only daily totals are available)' },
+    { key: 'voiceTokens', label: 'Tokens', num: true, group: 'voice', tok: true, used: 'voiceUsedTokens', na: (r) => !r.channels?.includes('voice') },
+    { key: 'digitalSessions', label: 'Billed sessions', num: true, group: 'digital', na: (r) => !r.channels?.includes('digital'), title: 'Chat, messaging, email and other digital sessions billed at this row\'s tier. Sessions that went on to a higher tier are under Escalated.' },
     { key: 'digitalTurns', label: 'Bot turns', num: true, group: 'digital', na: (r) => !r.botDigital, title: 'Billed prompt/response turns of digital bots (51 per token). Virtual Agents and AVAs bill per session, so turns do not apply to them.' },
-    { key: 'digitalTokens', label: 'Tokens', num: true, group: 'digital', tok: true, na: (r) => !r.channels?.includes('digital') },
+    { key: 'digitalTokens', label: 'Tokens', num: true, group: 'digital', tok: true, used: 'digitalUsedTokens', na: (r) => !r.channels?.includes('digital') },
     { key: 'absorbedSessions', label: 'Escalated', num: true, title: 'Sessions not billed because the same conversation reached a higher tier' },
-    { key: 'tokens', label: 'Total tokens', num: true, tok: true },
+    { key: 'tokens', label: 'Total tokens', num: true, tok: true, used: 'usedTokens' },
   ];
   const GROUPS = { voice: 'Voice', digital: 'Digital' };
+  // The token rule a row is billed by, as shown in "How tokens are calculated".
+  const ruleText = (r) => {
+    const t = cfg?.rates; if (!t || r.metered === false) return '';
+    if (r.category === 'va') return `sessions ÷ ${t.virtualAgentSessionsPerToken}`;
+    if (r.category === 'ava') return `${t.avaTokensPerSession} per session`;
+    const parts = [];
+    if (r.botVoice || r.channels?.includes('voice')) parts.push(`min ÷ ${t.voiceBotMinutesPerToken}`);
+    if (r.botDigital || r.channels?.includes('digital')) parts.push(`turns ÷ ${t.digitalBotTurnsPerToken}`);
+    return parts.join(' · ');
+  };
   const channelText = (r) => (r.channels?.length === 2 ? 'voice + digital' : r.channels?.[0] || '');
   const TABLES = {
     byFlow: {
       cols: [
         { key: 'name', label: 'Bot / flow', render: (r) => `${esc(r.name)}<span class="sub">${esc([r.flowType, channelText(r), r.divisionName].filter(Boolean).join(' · '))}${r.avaNames?.length ? ` · AVA: ${esc(r.avaNames.join(', '))}` : ''}${r.metered ? '' : ' · not token-metered'}</span>` },
-        { key: 'category', label: 'Type', render: (r) => catTag(r.category) },
+        { key: 'category', label: 'Type', render: (r) => `${catTag(r.category)}<span class="sub">${esc(ruleText(r))}</span>` },
         ...NUM_COLS,
       ],
       drill: (r) => { state.flowIds = [r.flowId]; },
     },
-    byCategory: { cols: [{ key: 'category', label: 'Type', render: (r) => catTag(r.category) }, ...NUM_COLS], drill: (r) => { state.categories = [r.category]; } },
+    byCategory: { cols: [{ key: 'category', label: 'Type', render: (r) => `${catTag(r.category)}<span class="sub">${esc(ruleText(r))}</span>` }, ...NUM_COLS], drill: (r) => { state.categories = [r.category]; } },
     byDivision: { cols: [{ key: 'name', label: 'Division' }, ...NUM_COLS], drill: (r) => { state.divisionIds = [r.key]; } },
     byLanguage: { cols: [{ key: 'name', label: 'Language' }, ...NUM_COLS], drill: (r) => { if (r.key !== '__none__') state.languages = [r.key]; } },
     byBotProduct: { cols: [{ key: 'name', label: 'Bot product' }, ...NUM_COLS], drill: (r) => { if (r.key !== '__none__') state.botProducts = [r.key]; } },
@@ -387,7 +397,14 @@
     const cell = (c, r) => (c.render ? c.render(r) : c.num ? numText(c, r[c.key], r) : esc(r[c.key]));
     const color = (r) => (r.category ? CAT[r.category].color : 'var(--accent)');
     const tdClass = (c) => `${c.num ? 'num' : ''}${c.group && def.cols.find((x) => x.group === c.group) === c ? ' g-start' : ''}`;
-    const body = rows.length ? rows.map((r, i) => `<tr class="click" data-i="${i}" tabindex="0">${def.cols.map((c) => `<td class="${tdClass(c)}">${cell(c, r)}</td>`).join('')}
+    // Token cells explain themselves: the rule result for the row's billed units, plus its share of
+    // rounding its type's total up to a whole token (rule 6).
+    const tokTitle = (c, r) => {
+      if (!c.used || c.na?.(r) || r[c.used] === undefined) return '';
+      const extra = r[c.key] - r[c.used];
+      return extra > 0.005 ? ` title="${fmt(r[c.used], 2)} by the token rules + ${fmt(extra, 2)} share of rounding up to whole tokens"` : '';
+    };
+    const body = rows.length ? rows.map((r, i) => `<tr class="click" data-i="${i}" tabindex="0">${def.cols.map((c) => `<td class="${tdClass(c)}"${tokTitle(c, r)}>${cell(c, r)}</td>`).join('')}
       <td><div class="bar" title="${fmt(total ? (r.tokens / total) * 100 : 0, 1)}%"><span style="width:${maxTok ? (r.tokens / maxTok) * 100 : 0}%;--c:${color(r)}"></span></div></td></tr>`).join('')
       : `<tr><td colspan="${def.cols.length + 1}" class="muted">No data for these filters.</td></tr>`;
     const sums = Object.fromEntries(def.cols.filter((c) => c.num).map((c) => [c.key, rows.reduce((s, r) => s + (r[c.key] || 0), 0)]));
@@ -451,7 +468,7 @@
       <ul>
         <li><b>Highest tier only.</b> A call or digital conversation consumes tokens only for the highest level of AI it reached. A bot that escalates to a Virtual Agent costs one Virtual Agent session; bot to Virtual Agent to AVA costs one AVA session. The lower-tier sessions still appear in the tables under "Escalated" but bill nothing.</li>
         ${['aggregate', 'mixed'].includes(lastUsage?.summary.mode) ? '<li><b>Fallback in use for some data:</b> per-conversation data was not available, so the highest-tier rule could not be applied and voice rounding is estimated at half an increment per call.</li>' : ''}
-        <li><b>Whole tokens.</b> ${roundLevel ? `${roundLevel} is rounded up to a whole token, and the extra is shared across its rows by their tokens, so rows, the chart and drill-downs add up to the whole-token tiles.` : 'Token rounding is turned off (TOKEN_ROUNDING=none).'}</li>
+        <li><b>Whole tokens.</b> ${roundLevel ? `${roundLevel} is rounded up to a whole token, and the extra is shared across its rows by their tokens, so rows, the chart and drill-downs add up to the whole-token tiles. Hover a token cell in the breakdown to see its value by the rules and its share of the round-up.` : 'Token rounding is turned off (TOKEN_ROUNDING=none).'}</li>
         <li><b>Rounding is in every figure.</b> Voice-bot time for the date range is rounded up to a whole minute once, and the extra seconds are shared across the voice bots in proportion to their billed time. Tiles, the chart, every breakdown row and drill-downs all use these shared-out values, so they always add up to the same total. A drill-down shows that bot's share of the bill rather than rounding it again on its own.</li>
         <li>Third-party bots reached through Bot Connector (for example Amazon Lex or Google Dialogflow) appear in analytics but are not charged Genesys bot tokens. Tick "Show non-metered bots" to list them.</li>
         <li>Days are bucketed in ${esc(cfg.timeZone)}. Rates come from server settings and can be changed in <code>.env</code>.</li>
