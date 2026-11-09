@@ -71,8 +71,18 @@
   }
 
   // ---------- API ----------
+  // The page reloads itself when the server was restarted with a different version, so a tab
+  // opened before an update never keeps drawing with the old code.
+  let loadedVersion = null;
   async function api(path) {
     const res = await fetch(path);
+    const v = res.headers.get('X-App-Version');
+    if (v && loadedVersion && v !== loadedVersion) {
+      let again = false;
+      try { again = sessionStorage.getItem('reloadedFor') === v; sessionStorage.setItem('reloadedFor', v); } catch { again = true; }
+      if (!again) { location.reload(); return new Promise(() => {}); }
+    }
+    if (v && !loadedVersion) loadedVersion = v;
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
     return body;
