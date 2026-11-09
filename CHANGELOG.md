@@ -13,6 +13,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- Today can be picked in the From and To date filters. The From picker used to stop at the current To date (so after "Last month" it could not reach today), and both pickers now go up to today. Picking a From after To (or a To before From) moves the other end along. Presets roll forward on each refresh, so a tab left open overnight includes the new day, and "today" uses the local date instead of the UTC one.
+
 - The tokens-over-time chart now reconciles with the Breakdown. Hovering a day shows, per type, its billed calls or sessions, billed minutes, billed turns and escalated sessions next to its tokens, so the days add up to the Breakdown row. A day whose sessions were all escalated to a higher tier (billing 0 for this type) shows a small ring on the baseline instead of nothing.
 - A dashboard tab opened before the server was updated kept drawing with the old code until a hard refresh. The page now reloads itself when the server reports a new version.
 - Days with usage could look empty in the tokens-over-time chart. Each bot's whole tokens go to its busiest days, so a quieter day (for example 17 short calls on Nov 5) could be allotted 0 tokens. Those days now get a faint dashed bar at the tokens they used, and the tooltip says the usage is billed in the whole-token total. Solid bars still add up to the tiles.

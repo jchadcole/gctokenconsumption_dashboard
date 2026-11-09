@@ -22,7 +22,8 @@
   const fmtBilledMin = (m) => (m === null || m === undefined || Number.isNaN(m) ? '–' : Number(m).toLocaleString(undefined, { maximumFractionDigits: 2 }));
   const compact = (n) => (Math.abs(n) >= 1000 ? Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n) : Number(n).toLocaleString(undefined, { maximumFractionDigits: Math.abs(n) < 1 ? 3 : Math.abs(n) < 10 ? 2 : 0 }));
   const iso = (d) => d.toISOString().slice(0, 10);
-  const today = () => iso(new Date());
+  // The browser's own calendar date (toISOString would give the UTC date, a day ahead in the evening).
+  const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
   const addDays = (s, n) => { const d = new Date(`${s}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return iso(d); };
 
   const state = {
@@ -180,8 +181,9 @@
   }
 
   $('#preset').onchange = (e) => { state.preset = e.target.value; if (state.preset !== 'custom') applyPreset(state.preset); refresh(); };
-  $('#start').onchange = (e) => { state.start = e.target.value; state.preset = 'custom'; refresh(); };
-  $('#end').onchange = (e) => { state.end = e.target.value; state.preset = 'custom'; refresh(); };
+  // Each picker can go up to today; picking past the other end moves that end along with it.
+  $('#start').onchange = (e) => { if (!e.target.value) return; state.start = e.target.value; if (state.end < state.start) state.end = state.start; state.preset = 'custom'; refresh(); };
+  $('#end').onchange = (e) => { if (!e.target.value) return; state.end = e.target.value; if (state.start > state.end) state.start = state.end; state.preset = 'custom'; refresh(); };
   $('#granularity').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; state.granularity = b.dataset.v; refresh(); };
   $('#includeUnmetered').onchange = (e) => { state.includeUnmetered = e.target.checked; refresh(); };
   $('#reset').onclick = () => {
@@ -216,7 +218,7 @@
   function syncControls() {
     $('#preset').value = state.preset;
     $('#start').value = state.start; $('#end').value = state.end;
-    $('#start').max = state.end; $('#end').min = state.start;
+    $('#start').max = today(); $('#end').max = today();
     document.querySelectorAll('#granularity button').forEach((b) => { b.classList.toggle('on', b.dataset.v === state.granularity); b.setAttribute('aria-checked', b.dataset.v === state.granularity); });
     document.querySelectorAll('#tabs button').forEach((b) => { b.classList.toggle('on', b.dataset.t === state.tab); b.setAttribute('aria-selected', b.dataset.t === state.tab); });
     $('#includeUnmetered').checked = state.includeUnmetered;
@@ -548,7 +550,8 @@
   // ---------- main ----------
   let seq = 0;
   async function refresh({ force = false } = {}) {
-    if (!state.start || !state.end) applyPreset(state.preset === 'custom' ? 'thisMonth' : state.preset);
+    // A preset is re-applied on every refresh, so a tab left open overnight rolls forward to include today.
+    if (state.preset !== 'custom' || !state.start || !state.end) applyPreset(state.preset === 'custom' ? 'thisMonth' : state.preset);
     if (state.start > state.end) [state.start, state.end] = [state.end, state.start];
     syncControls();
     history.replaceState(null, '', `?${queryString(true)}`);
