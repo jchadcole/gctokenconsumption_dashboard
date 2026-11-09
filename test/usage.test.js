@@ -235,3 +235,10 @@ test('breakdown rows split usage and tokens into voice and digital', () => {
   close(s.totals.va.voiceTokens, 0.5); close(s.totals.va.digitalTokens, 1);
   assert.equal(s.totals.va.digitalBillableSessions, 2);
 });
+
+test('a voice "bot" flow that serves messaging counts as digital', () => {
+  const t = total([row('m1', 'vbot', { mediaType: 'message', turns: 51 })]);
+  assert.equal(t.bot.voiceSeconds, 0);
+  assert.equal(t.bot.digitalTurns, 51);
+  close(t.bot.tokens, 1);
+});

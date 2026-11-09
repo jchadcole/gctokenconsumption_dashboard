@@ -26,6 +26,7 @@ const { CATEGORY } = require('./catalog');
 const METERED_BOT_PRODUCTS = new Set(['GenesysBotFlow', 'GenesysDigitalBotFlow']);
 // Analytics reports voice as "CALL" for bot sessions and "voice" elsewhere; compare case-insensitively.
 const VOICE_MEDIA = new Set(['voice', 'call', 'callback']);
+const DIGITAL_MEDIA = new Set(['message', 'messaging', 'chat', 'webchat', 'webmessaging', 'email', 'sms']);
 const VOICE_BOT_PRODUCTS = new Set(['GenesysBotFlow']);
 
 // ---------- dates ----------
@@ -80,10 +81,14 @@ function bucketOf(day, granularity) {
 const TIER = { [CATEGORY.BOT]: 1, [CATEGORY.VA]: 2, [CATEGORY.AVA]: 3 };
 // A row is voice when its flow is a voice bot flow (Architect type "bot"), its bot product is the
 // voice bot flow product, or its media type is a voice media type. Digital bot flows are never voice.
+// A known digital media type wins over the flow type: an Architect "bot" flow can also serve
+// messaging (seen on GenesysSC12, where an AVA-enabled bot flow ran 186 messaging sessions).
 function isVoiceRow(r) {
   if (r.flowType === 'digitalbot') return false;
+  const media = String(r.mediaType || '').toLowerCase();
+  if (DIGITAL_MEDIA.has(media)) return false;
   if (r.flowType === 'bot' || VOICE_BOT_PRODUCTS.has(r.botProduct)) return true;
-  return VOICE_MEDIA.has(String(r.mediaType || '').toLowerCase());
+  return VOICE_MEDIA.has(media);
 }
 
 // Rule 1: each voice-bot call is billed in increments (15 s), rounded up.
