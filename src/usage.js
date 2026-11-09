@@ -4,6 +4,9 @@
 //   POST /api/v2/analytics/bots/aggregates/query   nBotSessions, tBotSession, nBotSessionTurns
 //        grouped by conversationId, botId, botProduct, mediaType, languageCode (one query per day)
 //   POST /api/v2/analytics/flows/aggregates/query  nFlow per conversation for non-bot flows that embed an AVA
+//   GET  /api/v2/analytics/botflows/{id}/sessions  per-session rows for active bot flows, and for Virtual
+//        Agents / AVAs nested inside a bot (those are only reported under the calling bot's botId, with
+//        botFlowSubType VIRTUAL_AGENT / AGENTIC_VIRTUAL_AGENT)
 //
 // Token rules:
 //   1. Voice bot ........... each call billed in 15 s increments (rounded up); the total is rounded up
@@ -23,6 +26,7 @@ const { CATEGORY } = require('./catalog');
 const METERED_BOT_PRODUCTS = new Set(['GenesysBotFlow', 'GenesysDigitalBotFlow']);
 // Analytics reports voice as "CALL" for bot sessions and "voice" elsewhere; compare case-insensitively.
 const VOICE_MEDIA = new Set(['voice', 'call', 'callback']);
+const DIGITAL_MEDIA = new Set(['message', 'messaging', 'chat', 'webchat', 'webmessaging', 'email', 'sms']);
 const VOICE_BOT_PRODUCTS = new Set(['GenesysBotFlow']);
 
 // ---------- dates ----------
@@ -77,10 +81,14 @@ function bucketOf(day, granularity) {
 const TIER = { [CATEGORY.BOT]: 1, [CATEGORY.VA]: 2, [CATEGORY.AVA]: 3 };
 // A row is voice when its flow is a voice bot flow (Architect type "bot"), its bot product is the
 // voice bot flow product, or its media type is a voice media type. Digital bot flows are never voice.
+// A known digital media type wins over the flow type: an Architect "bot" flow can also serve
+// messaging (seen on GenesysSC12, where an AVA-enabled bot flow ran 186 messaging sessions).
 function isVoiceRow(r) {
   if (r.flowType === 'digitalbot') return false;
+  const media = String(r.mediaType || '').toLowerCase();
+  if (DIGITAL_MEDIA.has(media)) return false;
   if (r.flowType === 'bot' || VOICE_BOT_PRODUCTS.has(r.botProduct)) return true;
-  return VOICE_MEDIA.has(String(r.mediaType || '').toLowerCase());
+  return VOICE_MEDIA.has(media);
 }
 
 // Rule 1: each voice-bot call is billed in increments (15 s), rounded up.
@@ -335,6 +343,36 @@ async function fetchAggregateRows(client, intervals, timeZone, avaHostFlowIds) {
   return rows;
 }
 
+// A Virtual Agent or AVA that a bot flow calls (nested inside the bot's session) never appears in the
+// bot or flow aggregates under its own id: its usage is reported under the calling bot's botId with
+// botFlowSubType VIRTUAL_AGENT / AGENTIC_VIRTUAL_AGENT. Its own sessions are only visible from
+// /analytics/botflows/{id}/sessions. This returns, per botId, the AI subtypes the aggregates report.
+const AI_SUBTYPES = { VIRTUAL_AGENT: CATEGORY.VA, AGENTIC_VIRTUAL_AGENT: CATEGORY.AVA };
+async function fetchBotSubTypes(client, intervals, timeZone) {
+  const out = new Map();
+  for (const interval of intervals) {
+    const res = await client.post('/api/v2/analytics/bots/aggregates/query', {
+      interval, timeZone, groupBy: ['botId', 'botFlowSubType'], metrics: BOT_METRICS,
+    });
+    for (const r of res.results || []) {
+      const cat = AI_SUBTYPES[String(r.group?.botFlowSubType || '').toUpperCase()];
+      if (!cat || !r.group.botId) continue;
+      if (!out.has(r.group.botId)) out.set(r.group.botId, new Set());
+      out.get(r.group.botId).add(cat);
+    }
+  }
+  return out;
+}
+
+// Bot flows whose analytics show Virtual Agent / AVA usage above their own category, i.e. bots that
+// handed the call to a nested Virtual Agent or AVA.
+function hostsOfNestedAi(subTypes, catalog) {
+  const flows = new Map(catalog.flows.map((f) => [f.id, f]));
+  return [...subTypes.entries()]
+    .filter(([id, cats]) => [...cats].some((c) => TIER[c] > TIER[flows.get(id)?.category || CATEGORY.BOT]))
+    .map(([id]) => id);
+}
+
 // ---------- shaping ----------
 function enrich(rawRows, catalog) {
   const flows = new Map(catalog.flows.map((f) => [f.id, f]));
@@ -516,6 +554,28 @@ async function getUsage({ client, catalog, config, start, end }) {
     const names = new Map(catalog.flows.map((f) => [f.id, f.name]));
     warnings.push(`Bot session details unavailable for ${failed.map((f) => names.get(f.flowId) || f.flowId).join(', ')} (${failed[0].error.message}). Those bots are shown as daily totals, so per-call rounding is estimated and the highest-tier rule is not applied to them.`);
   }
+
+  // Nested Virtual Agents / AVAs: when a bot reports VA or AVA usage it is not classified as, read the
+  // sessions of every Virtual Agent and AVA bot flow that the aggregates did not already show as active.
+  // Their sessions share the calling bot's conversation id, so the highest-tier rule bills the call
+  // once, as the Virtual Agent / AVA, and the calling bot's session is shown as absorbed.
+  let hosts = [];
+  try {
+    hosts = hostsOfNestedAi(await fetchBotSubTypes(client, intervals, tz), catalog);
+  } catch (e) {
+    if (!isClientError(e)) throw e;
+    console.warn('[usage] bot subtype aggregate unavailable:', e.message);
+  }
+  if (hosts.length) {
+    const activeSet = new Set(active);
+    const candidates = catalog.flows.filter((f) => f.isBotFlow && f.category !== CATEGORY.BOT && !activeSet.has(f.id)).map((f) => f.id);
+    const nested = await fetchBotFlowSessions(client, candidates, start, end, tz, config.maxDaysPerQuery, { concurrency: 8 });
+    sessions.push(...nested.rows);
+    if (nested.failed.length) {
+      warnings.push(`Session details could not be read for ${nested.failed.length} Virtual Agent / AVA flow(s) (${nested.failed[0].error.message}), so Virtual Agents called from inside a bot may be missing.`);
+    }
+    console.log(`[usage] ${hosts.length} bot flow(s) called a nested Virtual Agent / AVA; checked ${candidates.length} VA/AVA flows, ${nested.rows.length} nested sessions found`);
+  }
   const raw = [...allocateTurns(sessions, daily.filter((r) => botFlowSet.has(r.flowId))), ...daily.filter((r) => !botFlowSet.has(r.flowId))];
 
   try {
@@ -534,5 +594,5 @@ async function getUsage({ client, catalog, config, start, end }) {
 
 module.exports = {
   getUsage, computeRows, fetchBotFlowSessions, allocateTurns, enrich, applyHighestTier, applyAggregateRules, collapse, billedCallSeconds, rowTokens,
-  allocateVoiceRounding, allocateTokenRounding, applyFilters, summarize, chunkIntervals, tzOffset, bucketOf, addDays, METERED_BOT_PRODUCTS,
+  allocateVoiceRounding, allocateTokenRounding, fetchBotSubTypes, hostsOfNestedAi, applyFilters, summarize, chunkIntervals, tzOffset, bucketOf, addDays, METERED_BOT_PRODUCTS,
 };
