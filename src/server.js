@@ -24,13 +24,14 @@ async function getCatalog(force = false) {
 
 // Short-lived cache for raw usage so filter changes do not re-query Genesys.
 const usageCache = new Map();
-async function getRows(start, end, catalog, { force = false } = {}) {
-  const key = `${start}|${end}|${catalog.builtAt}`;
+// tz: the time zone days are bucketed in (the dashboard's Time zone filter, else REPORT_TIMEZONE).
+async function getRows(start, end, catalog, { force = false, tz = config.timeZone } = {}) {
+  const key = `${start}|${end}|${tz}|${catalog.builtAt}`;
   const hit = usageCache.get(key);
   if (!force && hit && Date.now() - hit.at < 5 * 60 * 1000) return hit.rows;
   const rows = config.mock
     ? usage.computeRows(mock.mockRawRows(start, end), catalog, config.rates)
-    : await usage.getUsage({ client, catalog, config, start, end });
+    : await usage.getUsage({ client, catalog, config: { ...config, timeZone: tz }, start, end });
   rows.fetchedAt = new Date().toISOString();
   usageCache.set(key, { at: Date.now(), rows });
   if (usageCache.size > 20) usageCache.delete(usageCache.keys().next().value);
@@ -40,14 +41,20 @@ async function getRows(start, end, catalog, { force = false } = {}) {
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const list = (v) => (v === undefined || v === '' ? [] : String(v).split(',').map((s) => s.trim()).filter(Boolean));
 
+const validTimeZone = (tz) => {
+  if (!tz || typeof tz !== 'string') return false;
+  try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; } catch { return false; }
+};
+
 function parseQuery(q) {
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone: config.timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); // today in the report time zone
+  const tz = validTimeZone(q.tz) ? q.tz : config.timeZone;
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); // today in the report time zone
   const start = ISO_DATE.test(q.start || '') ? q.start : `${today.slice(0, 7)}-01`;
   const end = ISO_DATE.test(q.end || '') ? q.end : today;
   if (start > end) throw Object.assign(new Error('start must be on or before end'), { status: 400 });
   if (usage.addDays(start, 400) < end) throw Object.assign(new Error('Date range is limited to 400 days'), { status: 400 });
   return {
-    start, end,
+    start, end, tz,
     granularity: ['day', 'week', 'month'].includes(q.granularity) ? q.granularity : 'day',
     filters: {
       categories: list(q.categories).filter((c) => Object.values(CATEGORY).includes(c)),
@@ -81,7 +88,7 @@ app.get('/api/usage', wrap(async (req, res) => {
   // refresh=1 (the Refresh button) re-reads the catalog and usage from Genesys instead of the caches.
   const force = req.query.refresh === '1';
   const catalog = await getCatalog(force);
-  const all = await getRows(q.start, q.end, catalog, { force });
+  const all = await getRows(q.start, q.end, catalog, { force, tz: q.tz });
   const rows = usage.applyFilters(all, q.filters);
   const summary = usage.summarize(rows, q.granularity, q.start, q.end, config.rates);
   // Values present in the unfiltered data, used to populate the drill-down filter controls.
@@ -105,7 +112,7 @@ app.get('/api/usage', wrap(async (req, res) => {
 app.get('/api/usage.csv', wrap(async (req, res) => {
   const q = parseQuery(req.query);
   const catalog = await getCatalog();
-  const rows = usage.applyFilters(await getRows(q.start, q.end, catalog), q.filters);
+  const rows = usage.applyFilters(await getRows(q.start, q.end, catalog, { tz: q.tz }), q.filters);
   const cols = ['day', 'category', 'flowName', 'flowId', 'flowType', 'divisionName', 'mediaType', 'language', 'botProduct', 'sessions', 'billableSessions', 'absorbedSessions', 'turns', 'billableTurns', 'durationMs', 'billedSeconds', 'callMinutes', 'minutes', 'usedTokens', 'tokens', 'metered', 'avaNames', 'mode'];
   const esc = (v) => {
     const s = Array.isArray(v) ? v.join('; ') : v === null || v === undefined ? '' : typeof v === 'number' ? String(Math.round(v * 1000) / 1000) : String(v);
@@ -120,7 +127,7 @@ app.get('/api/billing', wrap(async (req, res) => {
   const q = parseQuery(req.query);
   if (config.mock) {
     const catalog = await getCatalog();
-    const rows = usage.applyFilters(await getRows(`${q.end.slice(0, 7)}-01`, q.end, catalog), {});
+    const rows = usage.applyFilters(await getRows(`${q.end.slice(0, 7)}-01`, q.end, catalog, { tz: q.tz }), {});
     const t = usage.summarize(rows, 'month', `${q.end.slice(0, 7)}-01`, q.end, config.rates).totals;
     return res.json(mock.mockBilling(q.start, q.end, {
       botVoice: t.bot.voiceTokens, botDigital: t.bot.digitalTokens, va: t.va.tokens, ava: t.ava.tokens,

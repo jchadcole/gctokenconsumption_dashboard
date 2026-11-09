@@ -201,3 +201,4 @@ details pre { max-height: 300px; overflow: auto; font-size: 12px; background: va
   .chart rect.bseg { stroke: CanvasText; }
 }
 td .sub.rule { white-space: nowrap; }
+#tz { max-width: 210px; }

@@ -150,3 +150,15 @@ test('without a VA/AVA subtype on a plain bot, idle Virtual Agent flows are not 
   await u.getUsage({ client, catalog, config, start: '2026-11-05', end: '2026-11-05' });
   assert.deepEqual(client.asked, ['jcc']);
 });
+
+test("an evening call in Central time counts on that local day, not the next UTC day", async () => {
+  const late = { ...session(0, 'va', 'c9', 14000), dateCreated: '2026-11-09T02:57:27.000Z', dateCompleted: '2026-11-09T02:57:41.000Z' };
+  const client = {
+    async post(path) { return path.includes('/bots/') ? { results: [aggRow('va', 'CALL', 1, 1)] } : { results: [] }; },
+    async get() { return { entities: [late] }; },
+  };
+  const day = async (tz, d) => u.summarize(await u.getUsage({ client, catalog, config: { ...config, timeZone: tz }, start: d, end: d }), 'day', d, d, rates).series[0].vaSessions;
+  assert.equal(await day('America/Chicago', '2026-11-08'), 1);
+  assert.equal(await day('America/Chicago', '2026-11-09'), 0);
+  assert.equal(await day('UTC', '2026-11-09'), 1);
+});

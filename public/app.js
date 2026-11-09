@@ -23,13 +23,17 @@
   const compact = (n) => (Math.abs(n) >= 1000 ? Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n) : Number(n).toLocaleString(undefined, { maximumFractionDigits: Math.abs(n) < 1 ? 3 : Math.abs(n) < 10 ? 2 : 0 }));
   const iso = (d) => d.toISOString().slice(0, 10);
   // The browser's own calendar date (toISOString would give the UTC date, a day ahead in the evening).
-  const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  // Time zone filter: days are bucketed in this zone. Default: this browser's zone.
+  const LOCAL_TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } })();
+  const COMMON_TZ = ['UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Phoenix', 'America/Los_Angeles', 'America/Anchorage', 'Pacific/Honolulu', 'Europe/London', 'Europe/Paris', 'Asia/Kolkata', 'Asia/Tokyo', 'Australia/Sydney'];
+  // Today in the selected time zone, so "Last 7 days" and the date pickers match the bucketing.
+  const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: state.tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const addDays = (s, n) => { const d = new Date(`${s}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return iso(d); };
 
   const state = {
     preset: 'thisMonth', start: '', end: '', granularity: 'day', categories: [],
     divisionIds: [], flowIds: [], mediaTypes: [], languages: [], botProducts: [], includeUnmetered: false,
-    tab: 'byFlow', sort: { key: 'tokens', dir: 'desc' }, scale: 'auto',
+    tab: 'byFlow', sort: { key: 'tokens', dir: 'desc' }, scale: 'auto', tz: LOCAL_TZ,
   };
   let catalog = null; let cfg = null; let lastUsage = null; let options = {};
 
@@ -49,11 +53,26 @@
     for (const k of ['preset', 'start', 'end', 'granularity', 'tab', 'scale']) if (p.get(k)) state[k] = p.get(k);
     for (const k of ['categories', ...MS_KEYS]) if (p.get(k)) state[k] = p.get(k).split(',').filter(Boolean);
     state.includeUnmetered = p.get('includeUnmetered') === '1';
+    if (p.get('tz') && tzOptions().includes(p.get('tz'))) state.tz = p.get('tz');
+  }
+  function tzOptions() {
+    let all = [];
+    try { all = Intl.supportedValuesOf('timeZone'); } catch { /* older browsers: common list only */ }
+    return [...new Set([LOCAL_TZ, ...COMMON_TZ, ...all])];
+  }
+  function buildTzSelect() {
+    const sel = $('#tz');
+    const opt = (z, label) => `<option value="${esc(z)}">${esc(label || z.replace(/_/g, ' '))}</option>`;
+    const common = [...new Set([LOCAL_TZ, ...COMMON_TZ])];
+    const rest = tzOptions().filter((z) => !common.includes(z));
+    sel.innerHTML = `<optgroup label="Common">${common.map((z) => opt(z, z === LOCAL_TZ ? `Local · ${z.replace(/_/g, ' ')}` : null)).join('')}</optgroup>`
+      + (rest.length ? `<optgroup label="All time zones">${rest.map((z) => opt(z)).join('')}</optgroup>` : '');
   }
   function queryString(forUrl) {
     const p = new URLSearchParams();
     if (forUrl) p.set('preset', state.preset);
     p.set('start', state.start); p.set('end', state.end); p.set('granularity', state.granularity);
+    if (!forUrl || state.tz !== LOCAL_TZ) p.set('tz', state.tz);
     for (const k of ['categories', ...MS_KEYS]) if (state[k].length) p.set(k, state[k].join(','));
     if (state.includeUnmetered) p.set('includeUnmetered', '1');
     if (forUrl && state.tab !== 'byFlow') p.set('tab', state.tab);
@@ -186,8 +205,10 @@
   $('#end').onchange = (e) => { if (!e.target.value) return; state.end = e.target.value; if (state.start > state.end) state.start = state.end; state.preset = 'custom'; refresh(); };
   $('#granularity').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; state.granularity = b.dataset.v; refresh(); };
   $('#includeUnmetered').onchange = (e) => { state.includeUnmetered = e.target.checked; refresh(); };
+  // Changing the zone moves the day boundaries; preset ranges ("Last 7 days") are recomputed for it.
+  $('#tz').onchange = (e) => { state.tz = e.target.value; if (state.preset !== 'custom') applyPreset(state.preset); refresh(); };
   $('#reset').onclick = () => {
-    Object.assign(state, { preset: 'thisMonth', granularity: 'day', categories: [], divisionIds: [], flowIds: [], mediaTypes: [], languages: [], botProducts: [], includeUnmetered: false });
+    Object.assign(state, { preset: 'thisMonth', granularity: 'day', categories: [], divisionIds: [], flowIds: [], mediaTypes: [], languages: [], botProducts: [], includeUnmetered: false, tz: LOCAL_TZ });
     applyPreset('thisMonth'); refresh();
   };
   $('#tabs').onclick = (e) => {
@@ -212,7 +233,7 @@
     if (!iso) { el.textContent = ''; return; }
     const d = new Date(iso);
     // The report time zone decides which day a call falls on, so show it next to the time.
-    el.textContent = `Data as of ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}${cfg?.timeZone ? ` · days in ${cfg.timeZone}` : ''}`;
+    el.textContent = `Data as of ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}${state.tz ? ` · days in ${state.tz}` : ''}`;
     el.title = d.toLocaleString();
   }
 
@@ -223,6 +244,7 @@
     document.querySelectorAll('#granularity button').forEach((b) => { b.classList.toggle('on', b.dataset.v === state.granularity); b.setAttribute('aria-checked', b.dataset.v === state.granularity); });
     document.querySelectorAll('#tabs button').forEach((b) => { b.classList.toggle('on', b.dataset.t === state.tab); b.setAttribute('aria-selected', b.dataset.t === state.tab); });
     $('#includeUnmetered').checked = state.includeUnmetered;
+    $('#tz').value = state.tz;
     renderCategoryChips();
     MS_KEYS.forEach(updateMsButton);
     renderActiveFilters();
@@ -544,7 +566,7 @@
         <li><b>Whole tokens.</b> ${roundLevel ? `${roundLevel} is rounded up to a whole token${r.tokenRounding === 'flow' ? ' (for example 543 Virtual Agent sessions ÷ 2 = 271.5, billed as 272), and the tiles add those up' : ''}. Each rounded-up total is handed to its rows (days, channels, languages) in proportion to usage with the largest remainder method, so every figure on the page is a whole number and they all add up to the tiles. Hover a token cell to see its value by the rules.` : 'Token rounding is turned off (TOKEN_ROUNDING=none), so tokens show with decimals.'}</li>
         <li><b>Rounding is in every figure.</b> Voice-bot time for the date range is rounded up to a whole minute once, and the extra seconds are shared across the voice bots in proportion to their billed time. Tiles, the chart, every breakdown row and drill-downs all use these shared-out values, so they always add up to the same total. A drill-down shows that bot's share of the bill rather than rounding it again on its own.</li>
         <li>Third-party bots reached through Bot Connector (for example Amazon Lex or Google Dialogflow) appear in analytics but are not charged Genesys bot tokens. Tick "Show non-metered bots" to list them.</li>
-        <li>Days are bucketed in ${esc(cfg.timeZone)}. Rates come from server settings and can be changed in <code>.env</code>.</li>
+        <li>Days are bucketed in ${esc(state.tz)} (the Time zone filter). Rates come from server settings and can be changed in <code>.env</code>.</li>
       </ul>`;
   }
 
@@ -574,6 +596,7 @@
   }
 
   async function init() {
+    buildTzSelect();
     readUrl();
     if (state.preset !== 'custom' || !state.start) applyPreset(state.preset);
     buildMultiSelects();

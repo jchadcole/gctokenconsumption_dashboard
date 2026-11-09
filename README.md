@@ -110,7 +110,7 @@ Each command bumps `package.json`, moves the Unreleased notes into a dated secti
 
 All settings are environment variables; see `.env.example`. The useful ones beyond credentials:
 
-- `REPORT_TIMEZONE`: IANA time zone used for daily buckets (default: the machine's own time zone).
+- `REPORT_TIMEZONE`: IANA time zone used for daily buckets when a request names none (default: the machine's own time zone). The dashboard's Time zone filter overrides it per view and defaults to the browser's zone.
 - `ANALYTICS_MAX_DAYS`: long ranges are split into chunks of this many days per analytics query (default 31).
 - `CATALOG_CACHE_MINUTES`: how long the flow / AVA catalog is cached (default 15). Usage is cached for 5 minutes so filter changes are fast. The **Refresh** button in the header bypasses both caches and re-fetches everything from Genesys; the header shows when the data was fetched.
 - `RATE_*`: token rules 1 to 4 (rule 5 is always on).
