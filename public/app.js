@@ -83,6 +83,9 @@
   function applyPreset(preset) {
     const t = today();
     const m0 = `${t.slice(0, 7)}-01`;
+    // "Today" is today in the Time zone filter's zone, so every preset follows that selection.
+    if (preset === 'today') { state.start = t; state.end = t; }
+    if (preset === 'yesterday') { state.start = addDays(t, -1); state.end = state.start; }
     if (preset === 'thisMonth') { state.start = m0; state.end = t; }
     if (preset === 'lastMonth') { const e = addDays(m0, -1); state.start = `${e.slice(0, 7)}-01`; state.end = e; }
     if (preset === 'last7') { state.start = addDays(t, -6); state.end = t; }
@@ -201,8 +204,8 @@
 
   $('#preset').onchange = (e) => { state.preset = e.target.value; if (state.preset !== 'custom') applyPreset(state.preset); refresh(); };
   // Each picker can go up to today; picking past the other end moves that end along with it.
-  $('#start').onchange = (e) => { if (!e.target.value) return; state.start = e.target.value; if (state.end < state.start) state.end = state.start; state.preset = 'custom'; refresh(); };
-  $('#end').onchange = (e) => { if (!e.target.value) return; state.end = e.target.value; if (state.start > state.end) state.start = state.end; state.preset = 'custom'; refresh(); };
+  $('#start').onchange = (e) => { if (!e.target.value) return; state.start = e.target.value > today() ? today() : e.target.value; if (state.end < state.start) state.end = state.start; state.preset = 'custom'; refresh(); };
+  $('#end').onchange = (e) => { if (!e.target.value) return; state.end = e.target.value > today() ? today() : e.target.value; if (state.start > state.end) state.start = state.end; state.preset = 'custom'; refresh(); };
   $('#granularity').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; state.granularity = b.dataset.v; refresh(); };
   $('#includeUnmetered').onchange = (e) => { state.includeUnmetered = e.target.checked; refresh(); };
   // Changing the zone moves the day boundaries; preset ranges ("Last 7 days") are recomputed for it.
@@ -599,6 +602,9 @@
     buildTzSelect();
     readUrl();
     if (state.preset !== 'custom' || !state.start) applyPreset(state.preset);
+    // A custom range from an old link cannot reach past today in the selected zone.
+    if (state.end > today()) state.end = today();
+    if (state.start > state.end) state.start = state.end;
     buildMultiSelects();
     try {
       [cfg, catalog] = await Promise.all([api('/api/config'), api('/api/catalog')]);

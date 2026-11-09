@@ -7,6 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- **Today** and **Yesterday** range presets. Every preset, the date pickers' limit and the API's default range use today in the Time zone filter's zone, and no range can go past today.
 - **Time zone** filter. Days (tiles, chart, Breakdown, CSV and the range presets) are counted in the chosen zone. It defaults to the browser's own zone, is kept in the page URL, and the header shows "days in <zone>".
 - Genesys Cloud credentials can come from 1Password. `.env.tpl` holds `op://` secret references and `npm run start:op` starts the app through `op run`, which resolves them. `.env` still works as before. The app stops with a clear message if it is started without `op run` while a credential holds an `op://` reference.
 - **Refresh** button that re-fetches the flow catalog, usage and billing from Genesys Cloud instead of using the server caches, plus a "Data as of" time in the header.
