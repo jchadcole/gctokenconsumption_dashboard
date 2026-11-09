@@ -41,7 +41,7 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const list = (v) => (v === undefined || v === '' ? [] : String(v).split(',').map((s) => s.trim()).filter(Boolean));
 
 function parseQuery(q) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: config.timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); // today in the report time zone
   const start = ISO_DATE.test(q.start || '') ? q.start : `${today.slice(0, 7)}-01`;
   const end = ISO_DATE.test(q.end || '') ? q.end : today;
   if (start > end) throw Object.assign(new Error('start must be on or before end'), { status: 400 });
