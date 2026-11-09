@@ -543,12 +543,19 @@ function summarize(rows, granularity, start, end, rates) {
     const b = bucketOf(d, granularity);
     if (buckets[buckets.length - 1] !== b) buckets.push(b);
   }
-  const series = buckets.map((b) => ({ bucket: b, bot: 0, va: 0, ava: 0 }));
+  // Each bucket carries the whole tokens it was allotted (bot / va / ava, which add up to the tiles)
+  // and the tokens used before the round-up (botUsed / vaUsed / avaUsed). A bot's whole tokens are
+  // handed to its busiest days, so a quieter day can be allotted 0 tokens while still having usage;
+  // the chart uses the *Used values to keep that day visible.
+  const series = buckets.map((b) => ({ bucket: b, bot: 0, va: 0, ava: 0, botUsed: 0, vaUsed: 0, avaUsed: 0 }));
   const idx = new Map(series.map((s, i) => [s.bucket, i]));
   for (const r of rows) {
     const i = idx.get(bucketOf(r.day, granularity));
-    if (i !== undefined) series[i][r.category] += r.tokens;
+    if (i === undefined) continue;
+    series[i][r.category] += r.tokens;
+    series[i][`${r.category}Used`] += r.usedTokens ?? r.tokens;
   }
+  for (const s of series) for (const c of cats) s[`${c}Used`] = tidy(s[`${c}Used`]);
   const modes = [...new Set(rows.filter((r) => r.metered).map((r) => r.mode).filter(Boolean))];
   return {
     totals: {
