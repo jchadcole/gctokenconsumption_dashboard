@@ -2,8 +2,8 @@
 (() => {
   const CATS = [
     { id: 'bot', label: 'Bots', short: 'Bot', color: 'var(--series-bot)' },
-    { id: 'va', label: 'Virtual Agents', short: 'Virtual Agent', color: 'var(--series-va)' },
-    { id: 'ava', label: 'Agentic Virtual Agents', short: 'AVA', color: 'var(--series-ava)' },
+    { id: 'va', label: 'Virtual Agents (VA)', short: 'VA', color: 'var(--series-va)' },
+    { id: 'ava', label: 'Agentic Virtual Agents (AVA)', short: 'AVA', color: 'var(--series-ava)' },
   ];
   const CAT = Object.fromEntries(CATS.map((c) => [c.id, c]));
   const MS_KEYS = ['divisionIds', 'flowIds', 'mediaTypes', 'languages', 'botProducts'];
@@ -62,6 +62,7 @@
   }
   function buildTzSelect() {
     const sel = $('#tz');
+    if (!sel) return;
     const opt = (z, label) => `<option value="${esc(z)}">${esc(label || z.replace(/_/g, ' '))}</option>`;
     const common = [...new Set([LOCAL_TZ, ...COMMON_TZ])];
     const rest = tzOptions().filter((z) => !common.includes(z));
@@ -209,7 +210,7 @@
   $('#granularity').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; state.granularity = b.dataset.v; refresh(); };
   $('#includeUnmetered').onchange = (e) => { state.includeUnmetered = e.target.checked; refresh(); };
   // Changing the zone moves the day boundaries; preset ranges ("Last 7 days") are recomputed for it.
-  $('#tz').onchange = (e) => { state.tz = e.target.value; if (state.preset !== 'custom') applyPreset(state.preset); refresh(); };
+  if ($('#tz')) $('#tz').onchange = (e) => { state.tz = e.target.value; if (state.preset !== 'custom') applyPreset(state.preset); refresh(); };
   $('#reset').onclick = () => {
     Object.assign(state, { preset: 'thisMonth', granularity: 'day', categories: [], divisionIds: [], flowIds: [], mediaTypes: [], languages: [], botProducts: [], includeUnmetered: false, tz: LOCAL_TZ });
     applyPreset('thisMonth'); refresh();
@@ -241,14 +242,15 @@
   }
 
   function syncControls() {
+    // Type pills first: they do not depend on the other controls, so a problem below cannot hide them.
+    renderCategoryChips();
     $('#preset').value = state.preset;
     $('#start').value = state.start; $('#end').value = state.end;
     $('#start').max = today(); $('#end').max = today();
     document.querySelectorAll('#granularity button').forEach((b) => { b.classList.toggle('on', b.dataset.v === state.granularity); b.setAttribute('aria-checked', b.dataset.v === state.granularity); });
     document.querySelectorAll('#tabs button').forEach((b) => { b.classList.toggle('on', b.dataset.t === state.tab); b.setAttribute('aria-selected', b.dataset.t === state.tab); });
     $('#includeUnmetered').checked = state.includeUnmetered;
-    $('#tz').value = state.tz;
-    renderCategoryChips();
+    if ($('#tz')) $('#tz').value = state.tz;
     MS_KEYS.forEach(updateMsButton);
     renderActiveFilters();
     $('#csv').href = `/api/usage.csv?${queryString(false)}`;
