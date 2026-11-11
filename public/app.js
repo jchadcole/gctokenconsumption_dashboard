@@ -291,7 +291,7 @@
         const pct = total ? (t.tokens / total) * 100 : 0;
         return `<button class="kpi ${active(c.id) ? '' : 'dim'}" data-c="${c.id}" title="Show only ${c.label}" style="--c:${c.color}">
           <div class="k-label"><span class="sw"></span>${c.label}</div>
-          <div class="k-value">${fmtTok(t.tokens)}</div>
+          <div class="k-value" title="${fmt(t.usedTokens, 2)} tokens before rounding up">${fmtTok(t.tokens)}</div>
           <div class="k-sub">${subs[c.id](t)}${fmt(pct, 0)}% of total${t.absorbedSessions && c.id === 'va' ? ` · ${fmt(t.absorbedSessions)} escalated to AVA` : ''}</div></button>`;
       }).join('')}`;
   }
@@ -442,18 +442,20 @@
     { key: 'digitalTurns', label: 'Bot turns', num: true, group: 'digital', na: (r) => !r.botDigital, title: 'Billed prompt/response turns of digital bots (51 per token). Virtual Agents and AVAs bill per session, so turns do not apply to them.' },
     { key: 'digitalTokens', label: 'Tokens', num: true, group: 'digital', tok: true, used: 'digitalUsedTokens', na: (r) => !r.channels?.includes('digital') },
     { key: 'absorbedSessions', label: 'Escalated', num: true, title: 'Sessions not billed because the same conversation reached a higher tier' },
-    { key: 'tokens', label: 'Total tokens', num: true, tok: true, used: 'usedTokens' },
+    { key: 'usedTokens', label: 'Before rounding', num: true, exact: true, title: 'Tokens by the rules before rounding up. Each type (Bot, VA, AVA) adds these up across its bots and rounds only that total up to a whole token.' },
+    { key: 'tokens', label: 'Total tokens', num: true, tok: true, used: 'usedTokens', title: 'Whole tokens: this row\'s share of its type\'s rounded-up total' },
   ];
   const GROUPS = { voice: 'Voice', digital: 'Digital' };
   // The token rule a row is billed by, as shown in "How tokens are calculated".
   const ruleText = (r) => {
     const t = cfg?.rates; if (!t || r.metered === false) return '';
-    if (r.category === 'va') return `sessions ÷ ${t.virtualAgentSessionsPerToken}, rounded up`;
-    if (r.category === 'ava') return `${t.avaTokensPerSession} per session, rounded up`;
+    const up = t.tokenRounding === 'flow' ? ', rounded up' : '';
+    if (r.category === 'va') return `sessions ÷ ${t.virtualAgentSessionsPerToken}${up}`;
+    if (r.category === 'ava') return `${t.avaTokensPerSession} per session${up}`;
     const parts = [];
     if (r.botVoice || r.channels?.includes('voice')) parts.push(`min ÷ ${t.voiceBotMinutesPerToken}`);
     if (r.botDigital || r.channels?.includes('digital')) parts.push(`turns ÷ ${t.digitalBotTurnsPerToken}`);
-    return parts.length ? `${parts.join(' · ')}, rounded up` : '';
+    return parts.length ? `${parts.join(' · ')}${up}` : '';
   };
   const channelText = (r) => (r.channels?.length === 2 ? 'voice + digital' : r.channels?.[0] || '');
   const TABLES = {
@@ -493,7 +495,7 @@
     }).join('');
     const head = `<thead><tr>${groupRow}<th rowspan="2">Share</th></tr><tr>${def.cols.filter((c) => c.group).map((c) => th(c)).join('')}</tr></thead>`;
     const agg = lastUsage?.summary.mode === 'aggregate';
-    const numText = (c, v, r) => ((c.blankIfAggregate && (agg || r?.mode === 'aggregate')) || (r && c.na?.(r)) ? '–' : c.billedMin ? fmtBilledMin(v) : c.min ? fmtMin(v) : c.tok ? fmtTok(v) : fmt(v));
+    const numText = (c, v, r) => ((c.blankIfAggregate && (agg || r?.mode === 'aggregate')) || (r && c.na?.(r)) ? '–' : c.billedMin ? fmtBilledMin(v) : c.min ? fmtMin(v) : c.exact ? fmt(v, 2) : c.tok ? fmtTok(v) : fmt(v));
     const cell = (c, r) => (c.render ? c.render(r) : c.num ? numText(c, r[c.key], r) : esc(r[c.key]));
     const color = (r) => (r.category ? CAT[r.category].color : 'var(--accent)');
     const tdClass = (c) => `${c.num ? 'num' : ''}${c.group && def.cols.find((x) => x.group === c.group) === c ? ' g-start' : ''}`;
@@ -556,7 +558,7 @@
   function renderMethod() {
     if (!cfg) return;
     const r = cfg.rates;
-    const roundLevel = { type: 'Each type\'s total for the date range (Bots, Virtual Agents, AVAs)', product: 'Each product\'s total for the date range (voice bots, digital bots, Virtual Agents, AVAs)', total: 'The total for the date range', flow: 'Each bot or flow\'s total for the date range' }[r.tokenRounding];
+    const roundLevel = { type: 'The unrounded tokens of every bot in a type are added up first, and only each type\'s total for the date range (Bots, VAs, AVAs)', product: 'Each product\'s total for the date range (voice bots, digital bots, Virtual Agents, AVAs)', total: 'The total for the date range', flow: 'Each bot or flow\'s total for the date range' }[r.tokenRounding];
     $('#method').innerHTML = `
       <p>Genesys Cloud does not publish an API that splits token usage by bot, so this page reads bot and flow usage per conversation from the analytics APIs and applies the rules below. Use the billing section above to compare with the official org total.</p>
       <div class="table-wrap"><table><thead><tr><th>Type</th><th>How it is identified</th><th>Rule</th></tr></thead><tbody>
@@ -568,7 +570,7 @@
       <ul>
         <li><b>Highest tier only.</b> A call or digital conversation consumes tokens only for the highest level of AI it reached. A bot that escalates to a Virtual Agent costs one Virtual Agent session; bot to Virtual Agent to AVA costs one AVA session. The lower-tier sessions still appear in the tables under "Escalated" but bill nothing.</li>
         ${['aggregate', 'mixed'].includes(lastUsage?.summary.mode) ? '<li><b>Fallback in use for some data:</b> per-conversation data was not available, so the highest-tier rule could not be applied and voice rounding is estimated at half an increment per call.</li>' : ''}
-        <li><b>Whole tokens.</b> ${roundLevel ? `${roundLevel} is rounded up to a whole token${r.tokenRounding === 'flow' ? ' (for example 543 Virtual Agent sessions ÷ 2 = 271.5, billed as 272), and the tiles add those up' : ''}. Each rounded-up total is handed to its rows (days, channels, languages) in proportion to usage with the largest remainder method, so every figure on the page is a whole number and they all add up to the tiles. Hover a token cell to see its value by the rules.` : 'Token rounding is turned off (TOKEN_ROUNDING=none), so tokens show with decimals.'}</li>
+        <li><b>Whole tokens.</b> ${roundLevel ? `${roundLevel} is rounded up to a whole token${r.tokenRounding === 'flow' ? ' (for example 543 VA sessions ÷ 2 = 271.5, billed as 272), and the tiles add those up' : r.tokenRounding === 'type' ? ' (for example 10 bots using 0.3 tokens each add up to 3, billed as 3, not 10). The org total is the sum of the three rounded-up type totals' : ''}. Each rounded-up total is handed to its rows (days, channels, languages) in proportion to usage with the largest remainder method, so every other token figure on the page is a whole number and they all add up to the tiles. The Before rounding column shows each row's tokens by the rules.` : 'Token rounding is turned off (TOKEN_ROUNDING=none), so tokens show with decimals.'}</li>
         <li><b>Rounding is in every figure.</b> Voice-bot time for the date range is rounded up to a whole minute once, and the extra seconds are shared across the voice bots in proportion to their billed time. Tiles, the chart, every breakdown row and drill-downs all use these shared-out values, so they always add up to the same total. A drill-down shows that bot's share of the bill rather than rounding it again on its own.</li>
         <li>Third-party bots reached through Bot Connector (for example Amazon Lex or Google Dialogflow) appear in analytics but are not charged Genesys bot tokens. Tick "Show non-metered bots" to list them.</li>
         <li>Days are bucketed in ${esc(state.tz)} (the Time zone filter). Rates come from server settings and can be changed in <code>.env</code>.</li>

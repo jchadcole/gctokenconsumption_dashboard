@@ -37,6 +37,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Token rounding now happens only at the type level, by default. The unrounded tokens of every bot in a type are added up, and only the Bot, VA and AVA totals for the date range are rounded up to a whole token (for example 10 bots using 0.3 tokens each bill 3 tokens, not 10). The org total is the sum of the three rounded-up type totals. The highest-tier rule and the 15 s voice increments are unchanged. The Breakdown has a new **Before rounding** column with each row's unrounded tokens, and hovering a tile shows its total before rounding. `TOKEN_ROUNDING` now defaults to `type`; `flow` keeps the old per-bot rounding.
+
 - The Breakdown panel shows voice and digital side by side for every bot, Virtual Agent and AVA: a **Voice** group (calls, billed bot minutes, tokens) and a **Digital** group (conversations, billed bot turns, tokens), then escalated sessions and total tokens. Turns appear only for digital bots and minutes only for voice bots, since Virtual Agents and AVAs bill per session; channels a row never used show "–". The Bot sessions column is gone, and the Type × media tab is replaced by a **Type** tab. Each type tile splits its tokens into voice and digital.
 - Token calculation follows the USPS token rules: voice bots are billed per call in 15 s increments, with the total rounded up to a whole minute and divided by 17; digital bots by prompt/response turns ÷ 51; Virtual Agents by sessions ÷ 2; AVAs at 1.2 per session.
 - Each conversation consumes tokens only for the highest tier it reached (AVA > Virtual Agent > Bot). Usage is now read per conversation, and lower-tier sessions are shown as "Escalated".

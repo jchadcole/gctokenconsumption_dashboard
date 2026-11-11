@@ -306,8 +306,38 @@ test('rule 6: every figure is a whole number and adds up to the rounded totals',
   assert.equal(f.totals.all.tokens, f.byFlow.reduce((a, g) => a + g.tokens, 0));
 });
 
-test('default rounding: each bot rounds up on its own, so 543 Virtual Agent sessions bill 272', () => {
+test('default rounding: unrounded bot tokens are added up per type, and only the type totals round up', () => {
+  const cat = { flows: [...catalog.flows,
+    ...Array.from({ length: 10 }, (_, i) => ({ id: `vb${i}`, name: `Voice bot ${i}`, category: 'bot', isBotFlow: true, flowType: 'bot', avas: [] })),
+    ...Array.from({ length: 3 }, (_, i) => ({ id: `va${i}`, name: `VA ${i}`, category: 'va', isBotFlow: true, flowType: 'bot', avas: [] })),
+    ...Array.from({ length: 2 }, (_, i) => ({ id: `av${i}`, name: `AVA ${i}`, category: 'ava', isBotFlow: true, flowType: 'bot', avas: [] }))] };
   const r = { ...rates, tokenRounding: undefined };
+  const raw = [
+    // 10 bots, one 1:45 call each = 17.5 billed min in all -> 18 min (rule 1) = 1.06 tokens -> 2
+    ...Array.from({ length: 10 }, (_, i) => row(`b${i}`, `vb${i}`, { mediaType: 'CALL', durationMs: 101000 })),
+    // 3 VAs, one session each = 1.5 -> 2 (per VA it would be 3)
+    ...Array.from({ length: 3 }, (_, i) => row(`v${i}`, `va${i}`)),
+    // 2 AVAs, one session each = 2.4 -> 3 (per AVA it would be 4); rule 5: the VA session in a1 is not billed
+    row('a0', 'av0'), row('a1', 'av1'), row('a1', 'va0', { mediaType: 'message' }),
+  ];
+  const rows = u.computeRows(raw, cat, r);
+  const s = u.summarize(rows, 'day', '2026-11-03', '2026-11-03', r);
+  close(s.totals.bot.usedTokens, 18 / 17); assert.equal(s.totals.bot.tokens, 2);
+  close(s.totals.va.usedTokens, 1.5); assert.equal(s.totals.va.tokens, 2);
+  close(s.totals.ava.usedTokens, 2.4); assert.equal(s.totals.ava.tokens, 3);
+  assert.equal(s.totals.all.tokens, 7); // the org total is the sum of the three rounded type totals
+  // each row keeps its unrounded tokens, and the rows' whole tokens add up to the type totals
+  for (const c of ['bot', 'va', 'ava']) {
+    const list = s.byFlow.filter((g) => g.category === c);
+    close(list.reduce((a, g) => a + g.usedTokens, 0), s.totals[c].usedTokens);
+    assert.equal(list.reduce((a, g) => a + g.tokens, 0), s.totals[c].tokens);
+  }
+  close(s.byFlow.find((g) => g.flowId === 'va1').usedTokens, 0.5);
+  assert.equal(s.series.reduce((a, b) => a + b.bot + b.va + b.ava, 0), 7);
+});
+
+test('flow rounding: each bot rounds up on its own, so 543 VA sessions bill 272', () => {
+  const r = { ...rates, tokenRounding: 'flow' };
   const raw = [
     ...Array.from({ length: 543 }, (_, i) => ({ ...row(`v${i}`, 'va'), day: i % 2 ? '2026-11-03' : '2026-11-04' })),
     ...Array.from({ length: 3 }, (_, i) => row(`a${i}`, 'ava')),
