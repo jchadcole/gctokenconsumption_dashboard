@@ -10,8 +10,10 @@
   const $ = (s, el = document) => el.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmt = (n, d = 0) => (n === null || n === undefined || Number.isNaN(n) ? '–' : Number(n).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d }));
-  // Tokens are whole numbers when TOKEN_ROUNDING is on; decimals only show when it is turned off.
-  const fmtTok = (n) => (Number.isInteger(Math.round(n * 1e9) / 1e9) ? fmt(n, 0) : fmt(n, Math.abs(n) < 10 ? 2 : Math.abs(n) < 100 ? 1 : 0));
+  // Rounded-up totals are whole numbers; unrounded tokens (rows, chart bars) show two decimals.
+  const fmtTok = (n) => (Number.isInteger(Math.round(n * 1e9) / 1e9) ? fmt(n, 0) : fmt(n, 2));
+  // TOKEN_ROUNDING=type (the default): rows keep unrounded tokens; only the Bot, VA and AVA totals round up.
+  const typeRounding = () => (cfg?.rates?.tokenRounding || 'type') === 'type';
   // Voice time as minutes:seconds, e.g. 4.25 -> "4:15", so it is never confused with whole billed minutes.
   const fmtMin = (m) => {
     if (m === null || m === undefined || Number.isNaN(m)) return '–';
@@ -292,7 +294,7 @@
         return `<button class="kpi ${active(c.id) ? '' : 'dim'}" data-c="${c.id}" title="Show only ${c.label}" style="--c:${c.color}">
           <div class="k-label"><span class="sw"></span>${c.label}</div>
           <div class="k-value" title="${fmt(t.usedTokens, 2)} tokens before rounding up">${fmtTok(t.tokens)}</div>
-          <div class="k-sub">${subs[c.id](t)}${fmt(pct, 0)}% of total${t.absorbedSessions && c.id === 'va' ? ` · ${fmt(t.absorbedSessions)} escalated to AVA` : ''}</div></button>`;
+          <div class="k-sub">${subs[c.id](t)}${typeRounding() && Math.abs(t.tokens - t.usedTokens) > 1e-9 ? `${fmtTok(t.usedTokens)} rounded up to ${fmt(t.tokens, 0)} · ` : ''}${fmt(pct, 0)}% of total${t.absorbedSessions && c.id === 'va' ? ` · ${fmt(t.absorbedSessions)} escalated to AVA` : ''}</div></button>`;
       }).join('')}`;
   }
   $('#kpis').onclick = (e) => { const b = e.target.closest('button.kpi'); if (b) toggleCategory(b.dataset.c, true); };
@@ -443,7 +445,7 @@
     { key: 'digitalTokens', label: 'Tokens', num: true, group: 'digital', tok: true, used: 'digitalUsedTokens', na: (r) => !r.channels?.includes('digital') },
     { key: 'absorbedSessions', label: 'Escalated', num: true, title: 'Sessions not billed because the same conversation reached a higher tier' },
     { key: 'usedTokens', label: 'Before rounding', num: true, exact: true, title: 'Tokens by the rules before rounding up. Each type (Bot, VA, AVA) adds these up across its bots and rounds only that total up to a whole token.' },
-    { key: 'tokens', label: 'Total tokens', num: true, tok: true, used: 'usedTokens', title: 'Whole tokens: this row\'s share of its type\'s rounded-up total' },
+    { key: 'tokens', label: 'Total tokens', num: true, tok: true, used: 'usedTokens', title: 'Tokens by the rules. With the default rounding these are not rounded: only each type\'s total (Bot, VA, AVA) is rounded up.' },
   ];
   const GROUPS = { voice: 'Voice', digital: 'Digital' };
   // The token rule a row is billed by, as shown in "How tokens are calculated".
@@ -476,7 +478,9 @@
 
   function renderTable() {
     if (!TABLES[state.tab]) state.tab = 'byFlow'; // e.g. an old link to the removed Type × media tab
-    const def = TABLES[state.tab];
+    const base = TABLES[state.tab];
+    // With type rounding the token columns are already unrounded, so Before rounding would repeat them.
+    const def = { ...base, cols: base.cols.filter((c) => !(c.key === 'usedTokens' && typeRounding())) };
     const rows = (lastUsage?.summary[state.tab] || []).slice();
     const { key, dir } = state.sort;
     rows.sort((a, b) => {
@@ -514,7 +518,11 @@
     sums.botVoice = rows.some((r) => r.botVoice); sums.botDigital = rows.some((r) => r.botDigital);
     sums.channels = [...new Set(rows.flatMap((r) => r.channels || []))];
     const totalRow = rows.length > 1 ? `<tr>${def.cols.map((c, i) => `<td class="${tdClass(c)}">${i === 0 ? 'Total' : c.num ? numText(c, sums[c.key], sums) : ''}</td>`).join('')}<td></td></tr>` : '';
-    const foot = totalRow ? `<tfoot>${totalRow}</tfoot>` : '';
+    // Type rounding: the rows add up to the unrounded total; the bill rounds up each type's total.
+    const t6 = lastUsage?.summary.totals;
+    const billedRow = typeRounding() && rows.length && t6 && Math.abs(t6.all.tokens - total) > 1e-9
+      ? `<tr class="billed"><td colspan="${def.cols.length - 1}">Billed: each type's total rounded up (${CATS.filter((c) => t6[c.id].usedTokens > 0).map((c) => `${CAT[c.id].short} ${Math.abs(t6[c.id].tokens - t6[c.id].usedTokens) > 1e-9 ? `${fmtTok(t6[c.id].usedTokens)} → ` : ''}${fmt(t6[c.id].tokens, 0)}`).join(', ')})</td><td class="num">${fmt(t6.all.tokens, 0)}</td><td></td></tr>` : '';
+    const foot = totalRow || billedRow ? `<tfoot>${totalRow}${billedRow}</tfoot>` : '';
     const t = $('#table');
     t.innerHTML = head + `<tbody>${body}</tbody>` + foot;
     t.querySelectorAll('th[data-k]').forEach((th) => th.onclick = () => {
@@ -570,7 +578,9 @@
       <ul>
         <li><b>Highest tier only.</b> A call or digital conversation consumes tokens only for the highest level of AI it reached. A bot that escalates to a Virtual Agent costs one Virtual Agent session; bot to Virtual Agent to AVA costs one AVA session. The lower-tier sessions still appear in the tables under "Escalated" but bill nothing.</li>
         ${['aggregate', 'mixed'].includes(lastUsage?.summary.mode) ? '<li><b>Fallback in use for some data:</b> per-conversation data was not available, so the highest-tier rule could not be applied and voice rounding is estimated at half an increment per call.</li>' : ''}
-        <li><b>Whole tokens.</b> ${roundLevel ? `${roundLevel} is rounded up to a whole token${r.tokenRounding === 'flow' ? ' (for example 543 VA sessions ÷ 2 = 271.5, billed as 272), and the tiles add those up' : r.tokenRounding === 'type' ? ' (for example 10 bots using 0.3 tokens each add up to 3, billed as 3, not 10). The org total is the sum of the three rounded-up type totals' : ''}. Each rounded-up total is handed to its rows (days, channels, languages) in proportion to usage with the largest remainder method, so every other token figure on the page is a whole number and they all add up to the tiles. The Before rounding column shows each row's tokens by the rules.` : 'Token rounding is turned off (TOKEN_ROUNDING=none), so tokens show with decimals.'}</li>
+        <li><b>Rounding up.</b> ${r.tokenRounding === 'type'
+          ? 'Only the Bot, VA and AVA totals are rounded up. Every bot, VA and AVA, every day in the chart and every breakdown row keeps its unrounded tokens (two decimals). The unrounded tokens of all bots in a type are added up for the date range and that total is rounded up to a whole token, so 10 bots using 0.3 tokens each bill 3, not 10. The org total is the sum of the three rounded-up type totals. The breakdown shows the unrounded total and, under it, the billed total.'
+          : roundLevel ? `${roundLevel} is rounded up to a whole token${r.tokenRounding === 'flow' ? ' (for example 543 VA sessions ÷ 2 = 271.5, billed as 272), and the tiles add those up' : ''}. Each rounded-up total is handed to its rows (days, channels, languages) in proportion to usage with the largest remainder method, so the token figures are whole numbers that add up to the tiles. The Before rounding column shows each row's tokens by the rules.` : 'Token rounding is turned off (TOKEN_ROUNDING=none), so tokens show with decimals.'}</li>
         <li><b>Rounding is in every figure.</b> Voice-bot time for the date range is rounded up to a whole minute once, and the extra seconds are shared across the voice bots in proportion to their billed time. Tiles, the chart, every breakdown row and drill-downs all use these shared-out values, so they always add up to the same total. A drill-down shows that bot's share of the bill rather than rounding it again on its own.</li>
         <li>Third-party bots reached through Bot Connector (for example Amazon Lex or Google Dialogflow) appear in analytics but are not charged Genesys bot tokens. Tick "Show non-metered bots" to list them.</li>
         <li>Days are bucketed in ${esc(state.tz)} (the Time zone filter). Rates come from server settings and can be changed in <code>.env</code>.</li>
