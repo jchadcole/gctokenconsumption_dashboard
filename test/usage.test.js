@@ -183,7 +183,7 @@ test('rows, chart and breakdowns carry the minute rounding and add up to the Bot
   close(drill.totals.bot.tokens, s.byFlow.find((f) => f.flowId === 'vbot2').tokens);
 });
 
-test('rule 6: each type is rounded up to a whole token, shared across its rows', () => {
+test('rule 6: only each type total is rounded up; rows keep their unrounded tokens', () => {
   const cat = { flows: [...catalog.flows, { id: 'vbot2', name: 'Voice bot 2', category: 'bot', isBotFlow: true, flowType: 'bot', avas: [] }] };
   const raw = [
     row('a1', 'vbot', { durationMs: 90000 }), // 1.5 billed min
@@ -199,12 +199,12 @@ test('rule 6: each type is rounded up to a whole token, shared across its rows',
   assert.equal(s.totals.ava.tokens, 2);
   assert.equal(s.totals.all.tokens, 4);
   close(s.totals.all.usedTokens, 2 / 17 + 0.5 + 1.2);
-  assert.equal(s.byFlow.find((f) => f.flowId === 'vbot').tokens, 1); // the Bots token goes to the bot that used 3/4 of it
-  assert.equal(s.byFlow.find((f) => f.flowId === 'vbot2').tokens, 0);
-  for (const tab of ['byFlow', 'byDivision', 'byMediaType', 'byLanguage', 'byBotProduct', 'byCategoryMedia']) close(s[tab].reduce((a, x) => a + x.tokens, 0), 4);
-  close(s.series.reduce((a, b) => a + b.bot + b.va + b.ava, 0), 4);
-  const drill = u.summarize(u.applyFilters(rows, { flowIds: ['vbot2'] }), 'day', '2026-11-03', '2026-11-04', r);
-  assert.equal(drill.totals.bot.tokens, 0);
+  // each bot keeps its unrounded share of the 2 billed minutes (1.5 + 0.5)
+  close(s.byFlow.find((f) => f.flowId === 'vbot').tokens, 1.5 / 17);
+  close(s.byFlow.find((f) => f.flowId === 'vbot2').tokens, 0.5 / 17);
+  close(s.byFlow.find((f) => f.flowId === 'va').tokens, 0.5);
+  for (const tab of ['byFlow', 'byDivision', 'byLanguage', 'byBotProduct', 'byCategory']) close(s[tab].reduce((a, x) => a + x.tokens, 0), 2 / 17 + 0.5 + 1.2);
+  close(s.series.reduce((a, b) => a + b.bot + b.va + b.ava, 0), 2 / 17 + 0.5 + 1.2);
 
   const total = u.summarize(u.computeRows(raw, cat, { ...rates, tokenRounding: 'total' }), 'day', '2026-11-03', '2026-11-04', rates).totals;
   assert.equal(total.all.tokens, 2); // 1.82 -> 2
@@ -238,7 +238,7 @@ test('breakdown rows split usage and tokens into voice and digital', () => {
 });
 
 test('every breakdown row follows the token rules: billed units -> tokens, then the whole-token share', () => {
-  const r6 = { ...rates, tokenRounding: 'type' };
+  const r6 = { ...rates, tokenRounding: 'product' };
   const cat = { flows: [...catalog.flows, { id: 'omni', name: 'Omni VA', category: 'va', isBotFlow: true, flowType: null, avas: [] }] };
   const raw = [
     ...Array.from({ length: 17 }, (_, i) => row(`c${i}`, 'vbot', { mediaType: 'CALL', durationMs: 800 })),
@@ -275,9 +275,9 @@ test('every breakdown row follows the token rules: billed units -> tokens, then 
   }
 });
 
-test('rule 6: every figure is a whole number and adds up to the rounded totals', () => {
+test('rule 6 (product level): every figure is a whole number and adds up to the rounded totals', () => {
   assert.deepEqual([...u.apportion([{ k: 'a', w: 0.5 }, { k: 'b', w: 0.3 }, { k: 'c', w: 0.2 }], 2, (x) => x.w, (x) => x.k)].map(([, n]) => n), [1, 1, 0]);
-  const r6 = { ...rates, tokenRounding: 'type' };
+  const r6 = { ...rates, tokenRounding: 'product' };
   const cat = { flows: [...catalog.flows, { id: 'vbot2', name: 'Voice bot 2', category: 'bot', isBotFlow: true, flowType: 'bot', avas: [] }] };
   const days = ['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05'];
   const raw = days.flatMap((day, d) => [
@@ -288,7 +288,6 @@ test('rule 6: every figure is a whole number and adds up to the rounded totals',
   ]);
   const rows = u.computeRows(raw, cat, r6);
   const s = u.summarize(rows, 'day', days[0], days.at(-1), r6);
-  for (const c of ['bot', 'va', 'ava']) assert.equal(s.totals[c].tokens, Math.ceil(s.totals[c].usedTokens - 1e-9));
   for (const tab of ['byFlow', 'byCategory', 'byDivision', 'byLanguage', 'byBotProduct', 'byMediaType']) {
     for (const g of s[tab]) for (const f of ['tokens', 'voiceTokens', 'digitalTokens']) assert.ok(Number.isInteger(g[f]), `${tab} ${g.key} ${f} = ${g[f]}`);
     assert.equal(s[tab].reduce((a, g) => a + g.tokens, 0), s.totals.all.tokens);
@@ -326,14 +325,17 @@ test('default rounding: unrounded bot tokens are added up per type, and only the
   close(s.totals.va.usedTokens, 1.5); assert.equal(s.totals.va.tokens, 2);
   close(s.totals.ava.usedTokens, 2.4); assert.equal(s.totals.ava.tokens, 3);
   assert.equal(s.totals.all.tokens, 7); // the org total is the sum of the three rounded type totals
-  // each row keeps its unrounded tokens, and the rows' whole tokens add up to the type totals
+  // no bot, VA or AVA is rounded on its own: each row keeps its unrounded tokens, and they add up
+  // to the type's unrounded total, which is the only figure rounded up
   for (const c of ['bot', 'va', 'ava']) {
     const list = s.byFlow.filter((g) => g.category === c);
-    close(list.reduce((a, g) => a + g.usedTokens, 0), s.totals[c].usedTokens);
-    assert.equal(list.reduce((a, g) => a + g.tokens, 0), s.totals[c].tokens);
+    close(list.reduce((a, g) => a + g.tokens, 0), s.totals[c].usedTokens);
+    assert.equal(s.totals[c].tokens, Math.ceil(s.totals[c].usedTokens - 1e-9));
   }
-  close(s.byFlow.find((g) => g.flowId === 'va1').usedTokens, 0.5);
-  assert.equal(s.series.reduce((a, b) => a + b.bot + b.va + b.ava, 0), 7);
+  for (const g of s.byFlow.filter((x) => x.category === 'bot')) close(g.tokens, 1.8 / 17); // 1:45 call + its share of the minute
+  close(s.byFlow.find((g) => g.flowId === 'va1').tokens, 0.5);
+  close(s.byFlow.find((g) => g.flowId === 'av0').tokens, 1.2);
+  close(s.series.reduce((a, b) => a + b.bot + b.va + b.ava, 0), 18 / 17 + 1.5 + 2.4);
 });
 
 test('flow rounding: each bot rounds up on its own, so 543 VA sessions bill 272', () => {

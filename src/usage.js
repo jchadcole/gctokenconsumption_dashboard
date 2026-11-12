@@ -394,13 +394,13 @@ function enrich(rawRows, catalog) {
 }
 
 // Rule 6: token consumption is rounded up to whole tokens. The rounding level is
-//   type ...... Bot, VA and AVA totals are each rounded up, after adding up their bots' unrounded
-//               tokens; the org total is the sum of the three (default)
+//   type ...... every row (bot, day, channel) keeps its unrounded tokens; only the Bot, VA and AVA
+//               totals are rounded up, and the org total is the sum of the three (default)
 //   flow ...... each bot / flow's total is rounded up on its own, and the tiles add those up
 //   product ... voice bot, digital bot, Virtual Agent and AVA are each rounded up
 //   total ..... only the all-types total is rounded up
 //   none ...... no token rounding (rows keep fractional tokens)
-// Every figure the dashboard shows is a whole number that adds up to the rounded totals. The whole
+// For the other levels every figure is a whole number that adds up to the rounded totals. The whole
 // tokens of each group are handed out in two steps with the largest remainder method:
 //   1. group total (rounded up) -> each bot / flow, in proportion to the tokens it used
 //   2. each bot / flow's whole tokens -> its rows (day, channel, language, ...), the same way
@@ -432,8 +432,10 @@ function apportion(items, total, weight, key) {
 }
 
 function allocateTokenRounding(rows, rates) {
-  const groupOf = ROUNDING_GROUP[rates.tokenRounding || 'type'];
+  const mode = rates.tokenRounding || 'type';
   const out = rows.map((r, i) => ({ ...r, usedTokens: r.tokens, _i: i }));
+  // type: rows keep their unrounded tokens; summarize() rounds up only the Bot, VA and AVA totals.
+  const groupOf = mode === 'type' ? null : ROUNDING_GROUP[mode];
   if (!groupOf) return out.map(({ _i, ...r }) => r);
   const billed = out.filter((r) => r.metered && r.tokens > 0);
   const byGroup = new Map();
@@ -533,6 +535,9 @@ function summarize(rows, granularity, start, end, rates) {
   const tidy = (v) => Math.round(v * 1e9) / 1e9;
   for (const c of cats) { totals[c].tokens = tidy(totals[c].tokens); totals[c].usedTokens = tidy(totals[c].usedTokens); }
   for (const c of cats) for (const ch of ['voice', 'digital']) { totals[c][`${ch}Tokens`] = tidy(totals[c][`${ch}Tokens`] || 0); totals[c][`${ch}BillableSessions`] = totals[c][`${ch}BillableSessions`] || 0; }
+  // Rule 6 (type, the default): only each type's total is rounded up, after adding up the unrounded
+  // tokens of all its rows. The org total below is the sum of the three rounded type totals.
+  if ((rates?.tokenRounding || 'type') === 'type') for (const c of cats) totals[c].tokens = Math.ceil(totals[c].usedTokens - 1e-9);
   totals.bot.voiceSeconds = voiceSeconds;
   totals.bot.voiceMinutesRounded = tidy(voiceMinutes);
   totals.bot.voiceTokens = rates ? tidy(voiceTokens) : null;
