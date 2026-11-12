@@ -17,8 +17,9 @@
 //   3. Virtual Agent ....... sessions / 2
 //   4. Agentic VA .......... 1.2 tokens per session
 //   5. A conversation consumes tokens only for the highest tier it reached (AVA > VA > Bot)
-//   6. Token consumption is rounded up to a whole token (TOKEN_ROUNDING sets the level: per type by
-//      default). The extra is shared across rows by their tokens, like the voice minute rounding.
+//   6. Token consumption is rounded up to a whole token. By default (TOKEN_ROUNDING=type) the unrounded
+//      tokens of every bot in a type are added up first and only the Bot, VA and AVA totals are rounded
+//      up; the org total is the sum of those three. The extra is shared across rows by their tokens.
 
 const { CATEGORY } = require('./catalog');
 
@@ -393,8 +394,9 @@ function enrich(rawRows, catalog) {
 }
 
 // Rule 6: token consumption is rounded up to whole tokens. The rounding level is
-//   flow ...... each bot / flow's total is rounded up on its own, and the tiles add those up (default)
-//   type ...... Bot, Virtual Agent and AVA totals are each rounded up
+//   type ...... Bot, VA and AVA totals are each rounded up, after adding up their bots' unrounded
+//               tokens; the org total is the sum of the three (default)
+//   flow ...... each bot / flow's total is rounded up on its own, and the tiles add those up
 //   product ... voice bot, digital bot, Virtual Agent and AVA are each rounded up
 //   total ..... only the all-types total is rounded up
 //   none ...... no token rounding (rows keep fractional tokens)
@@ -430,7 +432,7 @@ function apportion(items, total, weight, key) {
 }
 
 function allocateTokenRounding(rows, rates) {
-  const groupOf = ROUNDING_GROUP[rates.tokenRounding || 'flow'];
+  const groupOf = ROUNDING_GROUP[rates.tokenRounding || 'type'];
   const out = rows.map((r, i) => ({ ...r, usedTokens: r.tokens, _i: i }));
   if (!groupOf) return out.map(({ _i, ...r }) => r);
   const billed = out.filter((r) => r.metered && r.tokens > 0);
