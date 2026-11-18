@@ -1,2 +1,10 @@
 node_modules/
+
+# secrets: never commit
 .env
+.env.*
+.env_*
+*.pem
+*.key
+!.env.example
+!.env.tpl
